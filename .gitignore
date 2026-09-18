@@ -41,3 +41,7 @@ next-env.d.ts
 *.tsbuildinfo
 
 /pages-dist/
+
+/.large-data/
+/server-dist/
+/deploy/secrets/

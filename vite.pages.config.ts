@@ -8,7 +8,7 @@ export default defineConfig({
   base: '/cleanroom-detective/',
   publicDir: `${project}public`,
   plugins: [react()],
-  define: { __CLEANROOM_STATIC__: 'true' },
+  define: { __CLEANROOM_STATIC__: 'true', __CLEANROOM_SERVER__: 'false' },
   resolve: { alias: { '@': project } },
   css: { postcss: { plugins: [tailwindcss()] } },
   build: { outDir: `${project}pages-dist`, emptyOutDir: true },
