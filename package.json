@@ -13,7 +13,7 @@
     "format": "oxfmt",
     "ai:local": "node scripts/local-ai.mjs",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "lint:app": "oxlint app lib scripts tests standalone vite.pages.config.ts",
+    "lint:app": "oxlint app lib components/cleanroom scripts tests standalone vite.pages.config.ts",
     "build:pages": "vite build --config vite.pages.config.ts",
     "preview:pages": "vite preview --config vite.pages.config.ts --host 127.0.0.1"
   },

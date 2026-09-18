@@ -1,6 +1,6 @@
 # Cleanroom Detective
 
-A CSV investigation workspace for hackathon challenge 9. Upload one table, declare its data rules, inspect measured findings, approve reversible repairs, and export the cleaned data with an evidence ledger.
+A friendly spreadsheet review app for hackathon challenge 9. Choose a CSV or try the café example, review clear before-and-after suggestions, and download an updated copy. Every change needs your approval and can be undone.
 
 ## Share the browser demo
 
@@ -26,14 +26,14 @@ The AI chooses the order of all enabled checks, adapting to each check's measure
 
 ## Demo walkthrough
 
-1. Start with the clearly labeled synthetic café case and inspect its confirmed rules.
-2. Run an AI investigation (local) or rules audit. Expect four supported repairs: an exact duplicate, missing quantity, category spacing/case, and an explicit grams-to-kilograms conversion.
-3. Inspect and approve each proposal. Observe before/after values and the working table. Quantity is derived using exact decimal arithmetic, without rounding.
-4. The impossible February date requires source evidence. The large order is only a review request, not a proven defect. Keep it with a note.
-5. Undo the most recent decision from the ledger. Export the cleaned CSV, change ledger, printable HTML report, and untouched original.
+1. Choose **Try the example** on the welcome screen. The café dataset has confirmed example rules; **Adjust checks** lets you inspect them.
+2. Select **Check my file** to run an AI-assisted check (when connected locally) or standard checks in the shared website. Expect four supported repairs: an exact duplicate, missing quantity, category spacing/case, and an explicit grams-to-kilograms conversion.
+3. Review one suggestion at a time. Choose **Apply this fix** or **Keep as is**; the next pending item appears automatically. Expand the evidence when you want the details, or open **Your data** to inspect the working table. Quantity is derived using exact decimal arithmetic, without rounding.
+4. The impossible February date requires source evidence. The large order is only a review request, not a proven defect. Keep it as is, optionally adding a note.
+5. Undo the most recent decision from **Changes**. Choose **Download results** for the updated CSV, list of changes, printable HTML report, and untouched original.
 6. For a genuine evaluation, have a human prepare an independent answer key, keep it hidden until investigation completes, then reveal it. Columns: `row,check,truth`; `truth` is `defect` or `valid`. Row numbers refer to parsed records, excluding the header. The app compares against the first completed investigation and locks subsequent investigations after reveal. No blind evaluation or real dataset benchmark is claimed by the included sample.
 
-The visual explanation and LaTeX source are available from **How it works** and in `public/`.
+The visual explanation and LaTeX source are available from **Quick guide** and in `public/`.
 
 ## Data and limits
 

@@ -1,10 +1,9 @@
 'use client';
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ScanSearch,
   FileSpreadsheet,
   Upload,
-  Play,
   ShieldCheck,
   Check as CheckIcon,
   ArrowRight,
@@ -13,11 +12,16 @@ import {
   RotateCcw,
   Search,
   CircleHelp,
-  LoaderCircle,
   CheckCircle2,
   AlertCircle,
   X,
   FlaskConical,
+  ChevronRight,
+  ListChecks,
+  Table2,
+  History,
+  SlidersHorizontal,
+  Info,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -43,7 +47,6 @@ import {
   SelectContent,
   SelectItem,
 } from '@/components/ui/select';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -69,16 +72,46 @@ import {
   type Decision,
   type Trace,
   type KeyEntry,
+  type Check,
 } from '@/lib/audit';
 import { reportHTML } from '@/lib/report';
 import { STATIC_DEMO, publicAsset } from '@/lib/runtime';
+import { Welcome } from '@/components/cleanroom/welcome';
+import { CheckSettings } from '@/components/cleanroom/check-settings';
+import {
+  Accordion,
+  AccordionItem,
+  AccordionTrigger,
+  AccordionContent,
+} from '@/components/ui/accordion';
+import { Progress } from '@/components/ui/progress';
 const INITIAL = parseCSV(SAMPLE_CSV, 'cafe-sales-practice.csv');
-const label = (f: Finding) =>
-  f.kind === 'repair'
-    ? 'Supported repair'
-    : f.kind === 'issue'
-      ? 'Source needed'
-      : 'Human review';
+const CHECK_LABELS: Record<Check, string> = {
+  duplicates: 'Repeated rows',
+  arithmetic: 'Missing quantities',
+  dates: 'Dates',
+  categories: 'Names & categories',
+  units: 'Grams & kilograms',
+  outliers: 'Unusual numbers',
+};
+const friendlyTitle = (f: Finding) =>
+  ({
+    duplicates: f.patch
+      ? 'This row appears twice'
+      : f.title === 'Missing record ID'
+        ? 'A row is missing its ID'
+        : 'These IDs need a closer look',
+    arithmetic: f.patch
+      ? 'Fill in a missing quantity'
+      : 'A quantity needs checking',
+    dates: 'This date needs checking',
+    categories: f.patch
+      ? 'Make this label consistent'
+      : 'Check this category name',
+    units: f.patch ? 'Use the same unit' : 'Check this measurement',
+    outliers: 'An unusual value to double-check',
+  })[f.check];
+const label = (f: Finding) => (f.patch ? 'Suggested fix' : 'Take a look');
 const err = (e: unknown) =>
   e instanceof Error ? e.message : 'Something went wrong. Please try again.';
 function download(name: string, body: string, type = 'text/csv') {
@@ -89,57 +122,8 @@ function download(name: string, body: string, type = 'text/csv') {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function MapField({
-  label,
-  value,
-  headers,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  headers: string[];
-  onChange: (v: string) => void;
-}) {
-  const id = useId();
-  return (
-    <label className="field" htmlFor={id}>
-      {label}
-      <Select
-        value={value || '__none'}
-        onValueChange={(v) => onChange(v === '__none' ? '' : String(v))}
-      >
-        <SelectTrigger id={id} className="w-full">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="__none">Not mapped</SelectItem>
-          {headers.map((h) => (
-            <SelectItem key={h} value={h}>
-              {h}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </label>
-  );
-}
-function Toggle({
-  text,
-  value,
-  onChange,
-}: {
-  text: string;
-  value: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <label className="rule-toggle">
-      <Checkbox checked={value} onCheckedChange={(v) => onChange(v === true)} />
-      <span>{text}</span>
-    </label>
-  );
-}
 export default function Home() {
+  const [hasFile, setHasFile] = useState(false);
   const [original, setOriginal] = useState(INITIAL),
     [rules, setRules] = useState<Rules>(SAMPLE_RULES),
     [draft, setDraft] = useState<Rules>(SAMPLE_RULES),
@@ -157,7 +141,7 @@ export default function Home() {
     [note, setNote] = useState(''),
     [manual, setManual] = useState(''),
     [summary, setSummary] = useState(''),
-    [filter, setFilter] = useState('all'),
+    [filter, setFilter] = useState('pending'),
     [search, setSearch] = useState('');
   const [ruleOpen, setRuleOpen] = useState(false),
     [exportOpen, setExportOpen] = useState(false),
@@ -191,12 +175,16 @@ export default function Home() {
   const visible = combined.filter(
     (f) =>
       (filter === 'all' ||
-        (filter === 'repair' ? f.kind === 'repair' : f.kind !== 'repair')) &&
+        (filter === 'pending'
+          ? !decisions.some((d) => d.finding.id === f.id)
+          : filter === 'repair'
+            ? f.kind === 'repair'
+            : f.kind !== 'repair')) &&
       `${f.rowId} ${f.title} ${f.column}`
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
-  const selected = combined.find((f) => f.id === selectedId) ?? visible[0],
+  const selected = visible.find((f) => f.id === selectedId) ?? visible[0],
     decision = decisions.find((d) => d.finding.id === selected?.id);
   const activeChecks = availableChecks(rules);
   const applied = decisions.filter((d) => d.action === 'apply').length;
@@ -225,6 +213,7 @@ export default function Home() {
     try {
       const next = parseCSV(text, name);
       setOriginal(next);
+      setHasFile(true);
       const r = sample ? SAMPLE_RULES : inferRules(next.headers);
       setRules(r);
       setDraft(r);
@@ -242,13 +231,13 @@ export default function Home() {
       setStatus('Ready to investigate');
       setError('');
       setSearch('');
-      setFilter('all');
+      setFilter('pending');
       setTab('findings');
-      setRuleOpen(!sample);
+      setRuleOpen(false);
       setNotice(
         sample
-          ? 'Practice case reset. This is a synthetic teaching dataset.'
-          : 'CSV loaded. Confirm the data rules before investigating.',
+          ? 'The example is ready. Check the file to see what we find.'
+          : 'Your file is ready. You can choose which checks to run.',
       );
     } catch (e) {
       setError(err(e));
@@ -256,8 +245,12 @@ export default function Home() {
   }
   function saveRules() {
     try {
-      validateRules(draft, data.headers);
-      setRules(draft);
+      const confirmed = {
+        ...draft,
+        categories: draft.categories.map((c) => c.trim()).filter(Boolean),
+      };
+      validateRules(confirmed, data.headers);
+      setRules(confirmed);
       setFindings([]);
       setRan(false);
       setSummary('');
@@ -279,6 +272,8 @@ export default function Home() {
     setManual('');
     setSummary('');
     setTab('findings');
+    setFilter('pending');
+    setSearch('');
     setStatus(
       mode === 'ai'
         ? 'AI investigator choosing a check…'
@@ -384,8 +379,19 @@ export default function Home() {
           );
       }
     } catch (e) {
-      setError(err(e));
+      const stopped = e instanceof Error && e.name === 'AbortError';
+      setError(
+        stopped
+          ? 'Checking stopped. You can try again or use standard checks.'
+          : err(e),
+      );
       setStatus('Investigation incomplete');
+      setFindings(ran ? findings : []);
+      if (ran) {
+        setRan(true);
+        setTraces(traces);
+        setSummary(summary);
+      }
     } finally {
       running.current = false;
       setBusy(false);
@@ -396,8 +402,6 @@ export default function Home() {
     if (!selected || decision || busy) return;
     try {
       let f = selected;
-      if (action === 'keep' && !note.trim())
-        throw new Error('Add a short reason for keeping this value.');
       if (human) {
         if (!note.trim() || !manual.trim())
           throw new Error(
@@ -431,7 +435,11 @@ export default function Home() {
           id: crypto.randomUUID(),
           finding: f,
           action,
-          note: note.trim(),
+          note:
+            note.trim() ||
+            (action === 'keep'
+              ? 'Kept unchanged by the reviewer; no correction was verified.'
+              : ''),
           at: new Date().toISOString(),
         },
       ]);
@@ -446,10 +454,17 @@ export default function Home() {
           at: new Date().toISOString(),
         },
       ]);
+      const nextItem = rechecked.find(
+        (item) =>
+          item.id !== f.id && !decisions.some((d) => d.finding.id === item.id),
+      );
+      setSelectedId(nextItem?.id ?? f.id);
+      setNote('');
+      setManual('');
       setNotice(
         action === 'apply'
-          ? 'Repair applied to the working copy. All configured checks ran again.'
-          : 'Decision recorded. The original value remains.',
+          ? 'Change applied. Your original is still safe.'
+          : 'Kept as is. We saved your decision.',
       );
       setError('');
     } catch (e) {
@@ -460,6 +475,13 @@ export default function Home() {
     try {
       const next = decisions.slice(0, -1);
       setFindings(allFindings(materialize(original, next), rules));
+      setSelectedId(decisions.at(-1)?.finding.id ?? '');
+      setFilter('pending');
+      setSearch('');
+      setNote('');
+      setManual('');
+      setError('');
+      setTab('findings');
       setDecisions(next);
       setNotice('Last decision undone. The prior working values are restored.');
     } catch (e) {
@@ -520,342 +542,447 @@ export default function Home() {
       setError(err(e));
     }
   }
-  const setDraftField = <K extends keyof Rules>(key: K, value: Rules[K]) =>
-    setDraft((r) => ({ ...r, [key]: value }));
+  async function loadFile(file?: File) {
+    if (!file) return;
+    try {
+      if (!file.name.toLowerCase().endsWith('.csv'))
+        throw new Error(
+          'Please save your spreadsheet as a CSV file, then choose it here.',
+        );
+      if (file.size > 1_000_000)
+        throw new Error(
+          'This file is a little too large. Choose a CSV under 1 MB.',
+        );
+      reset(await file.text(), file.name, false);
+    } catch (e) {
+      setError(err(e));
+    }
+  }
+  function chooseFinding(id: string) {
+    setSelectedId(id);
+    setNote('');
+    setManual('');
+  }
+  function openChecks() {
+    setDraft(rules);
+    setError('');
+    setRuleOpen(true);
+  }
+  const complete = ran && pending.length === 0;
+  const doneCount = combined.length - pending.length;
+  const checkCount = activeChecks.filter((c) =>
+    traces.some((t) => t.tool === c),
+  ).length;
+  const currentStep = !hasFile ? 1 : complete ? 3 : 2;
+  const exportName = original.name.replace(/\.csv$/i, '') + '-updated.csv';
   return (
     <main className="shell">
-      <header className="topbar">
+      <header className="app-header">
         <div className="brand">
-          <ScanSearch />
-          <div>
-            Cleanroom Detective<small>Data investigation workspace</small>
-          </div>
-        </div>
-        <div className="topmeta">
-          <ShieldCheck size={18} /> Original preserved · Every change explained
+          <span className="brand-mark">
+            <ScanSearch />
+          </span>
+          <span>
+            Cleanroom Detective<small>A clearer view of your spreadsheet</small>
+          </span>
         </div>
         <Button
           variant="ghost"
-          className="tophelp"
+          className="help-button"
           onClick={() => setHelpOpen(true)}
         >
-          <CircleHelp /> How it works
+          <CircleHelp size={18} /> Quick guide
         </Button>
       </header>
-      <div className="workspace">
-        <div className="caseheading">
-          <div>
-            <p className="eyebrow">
-              Case 001 /{' '}
-              {original.original === SAMPLE_CSV
-                ? 'Synthetic practice dataset'
-                : 'Your dataset'}
-            </p>
-            <h1>{original.name}</h1>
-            <p className="case-subtitle">
-              {original.rows.length} source records · {original.headers.length}{' '}
-              columns · {applied} approved repairs
-            </p>
+      <div className="journey" aria-label="Your progress">
+        {['Add your file', 'Check & review', 'Download'].map((step, i) => (
+          <div
+            className={`${currentStep === i + 1 ? 'current' : ''} ${currentStep > i + 1 ? 'done' : ''}`}
+            key={step}
+            aria-current={currentStep === i + 1 ? 'step' : undefined}
+          >
+            <span>{currentStep > i + 1 ? <CheckIcon size={14} /> : i + 1}</span>
+            <b>{step}</b>
           </div>
-          <div className="actions">
-            <input
-              ref={uploadRef}
-              type="file"
-              accept=".csv,text/csv"
-              hidden
-              onChange={async (e) => {
-                const f = e.target.files?.[0];
-                if (f) {
-                  if (f.size > 1_000_000)
-                    setError('Use a CSV smaller than 1 MB.');
-                  else reset(await f.text(), f.name, false);
-                }
-                e.target.value = '';
-              }}
-            />
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() => uploadRef.current?.click()}
-            >
-              <Upload /> Upload CSV
-            </Button>
-            <Button
-              variant="outline"
-              disabled={busy || !!answerKey.length}
-              onClick={() => {
-                setDraft(rules);
-                setError('');
-                setRuleOpen(true);
-              }}
-            >
-              <Settings2 /> Data rules
-            </Button>
-            <Button
-              variant="outline"
-              disabled={!ran || busy}
-              onClick={() => setExportOpen(true)}
-            >
-              <Download /> Export
-            </Button>
-            <Button
-              disabled={busy || !!answerKey.length}
-              onClick={() => investigate(model.configured ? 'ai' : 'rules')}
-            >
-              {busy ? <LoaderCircle className="spin" /> : <Play />}
-              {busy
-                ? 'Investigating…'
-                : model.configured
-                  ? 'Start AI investigation'
-                  : 'Run rules audit'}
-            </Button>
-          </div>
+        ))}
+      </div>
+      <input
+        ref={uploadRef}
+        type="file"
+        accept=".csv,text/csv"
+        hidden
+        onChange={(e) => {
+          void loadFile(e.target.files?.[0]);
+          e.target.value = '';
+        }}
+      />
+      {error && (
+        <div className="global-message error-banner" role="alert">
+          <AlertCircle size={18} />
+          <span>{error}</span>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Dismiss message"
+            onClick={() => setError('')}
+          >
+            <X />
+          </Button>
         </div>
-        {error && (
-          <div className="error-banner" role="alert">
-            <AlertCircle size={18} />
-            <span>{error}</span>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Dismiss error"
-              onClick={() => setError('')}
-            >
-              <X />
-            </Button>
-          </div>
-        )}
-        {notice && (
-          <output className="toast-inline">
-            <CheckCircle2 size={17} />
-            {notice}
-          </output>
-        )}
-        <div className="workgrid">
-          <aside className="panel sidepanel">
-            <div className="panelbody">
-              <div className="fileicon">
-                <FileSpreadsheet />
-              </div>
-              <h2>Case file</h2>
-              <p className="explain">
-                A clear trail from question to evidence.
-              </p>
-              <div className="stats">
-                <div className="stat">
-                  <strong>{data.rows.length}</strong>
-                  <span>working records</span>
-                </div>
-                <div className="stat">
-                  <strong>{activeChecks.length}</strong>
-                  <span>active checks</span>
-                </div>
-              </div>
-              <span className="pill good">
-                <ShieldCheck size={13} /> Original kept intact
+      )}
+      {!hasFile ? (
+        <Welcome
+          onChoose={() => uploadRef.current?.click()}
+          onExample={() => reset()}
+          onDrop={(f) => {
+            void loadFile(f);
+          }}
+        />
+      ) : (
+        <div className="review-workspace">
+          <div className="file-ribbon">
+            <span className="file-badge">
+              <FileSpreadsheet />
+            </span>
+            <div>
+              <strong>{original.name}</strong>
+              <span>
+                {data.rows.length.toLocaleString()} rows <i>·</i>{' '}
+                {data.headers.length} columns{' '}
+                {original.original === SAMPLE_CSV && <em>Example file</em>}
               </span>
-              <div className="section-label">
-                <h3>Data rules</h3>
+            </div>
+            <div className="file-actions">
+              {!!decisions.length && (
                 <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Configure data rules"
-                  disabled={busy || !!answerKey.length}
-                  onClick={() => {
-                    setDraft(rules);
-                    setError('');
-                    setRuleOpen(true);
-                  }}
-                >
-                  <Settings2 />
-                </Button>
-              </div>
-              {activeChecks.map((c) => (
-                <div className="side-rule" key={c}>
-                  <CheckIcon />
-                  {CHECK_NAMES[c]}
-                </div>
-              ))}
-              {!activeChecks.length && (
-                <p className="footnote">Configure a check to begin.</p>
-              )}
-              <p className="footnote">
-                Only confirmed rules can support a repair. Uncertainty stays
-                visible.
-              </p>
-              <div className="modelcard">
-                <p>
-                  <span
-                    className={`modeldot ${model.configured ? 'live' : ''}`}
-                  />
-                  {model.configured
-                    ? 'Live AI investigator'
-                    : 'Rules audit available'}
-                </p>
-                <small>
-                  {model.configured
-                    ? `${model.provider} · ${model.model}`
-                    : STATIC_DEMO
-                      ? 'Runs entirely in your browser. Upload a CSV or try the practice case. No sign-in needed.'
-                      : 'The hosted app has no model key configured. Checks and review still work.'}
-                </small>
-                {model.configured && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busy || !!answerKey.length}
-                    onClick={() => investigate('rules')}
-                  >
-                    Run rules comparison
-                  </Button>
-                )}
-              </div>
-              <div className="sidebar-bottom">
-                <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
                   disabled={busy}
-                  onClick={() => reset()}
+                  onClick={() => setExportOpen(true)}
                 >
-                  <RotateCcw /> Reset practice case
+                  <Download size={15} /> Download
                 </Button>
-                <p className="footnote">
-                  This session stays in this tab. Export before closing. CSV
-                  contents are not stored by this app.
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={() => uploadRef.current?.click()}
+              >
+                Change file
+              </Button>
+            </div>
+          </div>
+          {notice && (
+            <div className="decision-message">
+              <output>
+                <CheckCircle2 size={17} />
+                {notice}
+              </output>
+              {decisions.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={undo}
+                >
+                  <RotateCcw size={14} /> Undo
+                </Button>
+              )}
+            </div>
+          )}
+          {!ran && !busy ? (
+            <section className="ready-card">
+              <div className="ready-copy">
+                <span className="soft-icon">
+                  <ListChecks size={26} />
+                </span>
+                <p className="eyebrow">Your file is ready</p>
+                <h1>Let’s see what needs a little attention.</h1>
+                <p>
+                  We’ll look for possible problems and explain what we find.
+                  You’ll choose which changes to keep.
                 </p>
+                <div className="check-chips">
+                  {activeChecks.map((c) => (
+                    <span key={c}>
+                      <CheckIcon size={13} />
+                      {CHECK_LABELS[c]}
+                    </span>
+                  ))}
+                </div>
+                {!activeChecks.length && (
+                  <p className="setting-help">
+                    We couldn’t match the column names automatically. Choose the
+                    columns you want us to check.
+                  </p>
+                )}
+                <div className="ready-actions">
+                  <Button
+                    className="primary-large"
+                    disabled={!!answerKey.length}
+                    onClick={() =>
+                      activeChecks.length
+                        ? void investigate(model.configured ? 'ai' : 'rules')
+                        : openChecks()
+                    }
+                  >
+                    {activeChecks.length ? <ScanSearch /> : <Settings2 />}
+                    {activeChecks.length
+                      ? 'Check my file'
+                      : 'Choose columns to check'}
+                    <ArrowRight size={17} />
+                  </Button>
+                  {!!activeChecks.length && (
+                    <Button
+                      variant="ghost"
+                      disabled={!!answerKey.length}
+                      onClick={openChecks}
+                    >
+                      <SlidersHorizontal size={17} /> Adjust checks
+                    </Button>
+                  )}
+                </div>
+                {model.configured && !!activeChecks.length && (
+                  <Button
+                    variant="ghost"
+                    className="standard-checks"
+                    disabled={!!answerKey.length}
+                    onClick={() => void investigate('rules')}
+                  >
+                    Use standard checks without AI
+                  </Button>
+                )}
+                <span className="trust-line">
+                  <ShieldCheck size={15} /> Your original file won’t be changed.
+                </span>
               </div>
-            </div>
-          </aside>
-          <section className="maincolumn">
-            <div className="metrics">
-              <div>
-                <span>Needs a decision</span>
-                <strong>{ran ? pending.length : '—'}</strong>
+              <div className="ready-preview">
+                <div className="preview-caption">
+                  <Table2 size={16} /> A peek at your file
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      {data.headers.slice(0, 3).map((h) => (
+                        <TableHead key={h}>{h}</TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.rows.slice(0, 4).map((row) => (
+                      <TableRow key={row.id}>
+                        {row.cells.slice(0, 3).map((c, i) => (
+                          <TableCell key={i}>{c || '—'}</TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <small>
+                  {original.original === SAMPLE_CSV
+                    ? 'The example includes a few intentional mistakes.'
+                    : 'We’ll check every row, not just this preview.'}
+                </small>
               </div>
-              <div className="teal">
-                <span>Supported repairs</span>
-                <strong>
-                  {ran
-                    ? pending.filter((f) => f.kind === 'repair').length
-                    : '—'}
-                </strong>
+            </section>
+          ) : busy ? (
+            <section className="checking-card" aria-live="polite">
+              <div className="checking-symbol">
+                <ScanSearch size={30} />
               </div>
-              <div className="amber">
-                <span>Source / human review</span>
-                <strong>
-                  {ran
-                    ? pending.filter((f) => f.kind !== 'repair').length
-                    : '—'}
-                </strong>
+              <p className="eyebrow">One step at a time</p>
+              <h1>Taking a closer look…</h1>
+              <p>Your file is unchanged while we check it.</p>
+              <Progress
+                value={
+                  activeChecks.length
+                    ? (checkCount / activeChecks.length) * 100
+                    : 0
+                }
+                aria-label="Checks completed"
+              />
+              <small>
+                {checkCount} of {activeChecks.length} checks complete
+              </small>
+              <p className="checking-detail">{status}</p>
+              <Button variant="ghost" onClick={() => abortRef.current?.abort()}>
+                Stop checking
+              </Button>
+            </section>
+          ) : (
+            <>
+              <div className="results-heading">
+                <div>
+                  <p className="eyebrow">
+                    {complete
+                      ? 'You’re ready for the next step'
+                      : 'Let’s take a look together'}
+                  </p>
+                  <h1>
+                    {complete
+                      ? 'Your review is complete.'
+                      : 'A few things to look at.'}
+                  </h1>
+                  <p>
+                    {complete
+                      ? `${applied} change${applied === 1 ? '' : 's'} applied. ${decisions.filter((d) => d.action === 'keep').length} item${decisions.filter((d) => d.action === 'keep').length === 1 ? '' : 's'} kept as they were.`
+                      : `${pending.filter((f) => f.kind === 'repair').length} suggested fixes and ${pending.filter((f) => f.kind !== 'repair').length} things that need your judgment.`}
+                  </p>
+                </div>
+                <Button
+                  className="download-top"
+                  onClick={() => setExportOpen(true)}
+                >
+                  <Download /> Download results
+                </Button>
               </div>
-              <div>
-                <span>Repairs applied</span>
-                <strong>{applied}</strong>
-              </div>
-            </div>
-            <div className="panel">
-              <Tabs value={tab} onValueChange={(v) => setTab(String(v))}>
-                <div className="tabbar">
-                  <TabsList variant="line" className="audit-tabs">
-                    <TabsTrigger value="findings">
-                      Findings{' '}
-                      {ran && (
-                        <span className="tabcount">{combined.length}</span>
-                      )}
-                    </TabsTrigger>
-                    <TabsTrigger value="dataset">Dataset</TabsTrigger>
-                    <TabsTrigger value="trace">Investigation</TabsTrigger>
-                    <TabsTrigger value="ledger">Change ledger</TabsTrigger>
-                  </TabsList>
-                  <span className={`status-indicator ${busy ? 'working' : ''}`}>
-                    {busy ? 'Running' : ran ? 'Reviewed checks' : 'Ready'}
+              <div className="review-progress">
+                <div>
+                  <span>
+                    {doneCount} of {combined.length} items reviewed
+                  </span>
+                  <span>
+                    <ShieldCheck size={14} /> You’re in control
                   </span>
                 </div>
+                <Progress
+                  value={
+                    combined.length ? (doneCount / combined.length) * 100 : 100
+                  }
+                  aria-label="Review progress"
+                />
+              </div>
+              <Tabs
+                value={tab}
+                onValueChange={(v) => setTab(String(v))}
+                className="work-tabs"
+              >
+                <div className="review-navigation">
+                  <TabsList variant="line">
+                    <TabsTrigger value="findings">
+                      <ListChecks /> Review
+                      {pending.length > 0 && (
+                        <span className="tabcount">{pending.length}</span>
+                      )}
+                    </TabsTrigger>
+                    <TabsTrigger value="dataset">
+                      <Table2 /> Your data
+                    </TabsTrigger>
+                    <TabsTrigger value="ledger">
+                      <History /> Changes
+                    </TabsTrigger>
+                    <TabsTrigger value="trace">
+                      <Info /> Details
+                    </TabsTrigger>
+                  </TabsList>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={!!answerKey.length}
+                    onClick={openChecks}
+                  >
+                    <SlidersHorizontal /> Check settings
+                  </Button>
+                </div>
                 <TabsContent value="findings">
-                  {busy && (
-                    <output className="run-status">
-                      <LoaderCircle className="spin" size={18} />
-                      {status}
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => abortRef.current?.abort()}
-                      >
-                        Stop
-                      </Button>
-                    </output>
-                  )}
-                  {!ran && !busy ? (
-                    <div className="empty-state">
-                      <div className="empty-symbol">
-                        <ScanSearch size={32} />
+                  {complete && filter === 'pending' ? (
+                    <section className="finished-card">
+                      <div className="finish-symbol">
+                        <CheckIcon size={32} />
                       </div>
-                      <p className="eyebrow">Follow the evidence</p>
-                      <h2>Find the problem. Show the proof.</h2>
+                      <h2>
+                        {combined.length
+                          ? 'All decisions saved.'
+                          : 'No issues found in these checks.'}
+                      </h2>
                       <p>
-                        Inspect a CSV, test its rules, and see exactly why a
-                        value deserves attention. You decide what changes.
+                        {combined.length
+                          ? 'Your updated file contains only the changes you approved.'
+                          : 'The checks you selected did not flag any rows. You can add more checks or download a copy.'}
+                        {decisions.some((d) => d.action === 'keep') &&
+                          ' Items you kept unchanged still appear in the detailed report.'}
                       </p>
-                      <div className="flow">
-                        {[
-                          'Profile',
-                          'Inspect',
-                          'Review & repair',
-                          'Re-check',
-                        ].map((s, i) => (
-                          <span key={s}>
-                            <b>{i + 1}</b>
-                            {s}
-                            {i < 3 && <ArrowRight size={15} />}
-                          </span>
-                        ))}
-                      </div>
                       <Button
-                        onClick={() =>
-                          investigate(model.configured ? 'ai' : 'rules')
-                        }
+                        className="primary-large"
+                        onClick={() => download(exportName, toCSV(data))}
                       >
-                        <Play />
-                        {model.configured
-                          ? 'Start AI investigation'
-                          : 'Run rules audit'}
+                        <Download /> Download updated CSV
                       </Button>
-                      <small>
-                        {original.original === SAMPLE_CSV
-                          ? 'Synthetic case: four provable repairs, one impossible date, and one unusual order.'
-                          : 'Your file is ready. Confirm its rules, then run the checks.'}
-                      </small>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="finding-toolbar">
-                        <div className="searchfield">
-                          <Search size={16} />
-                          <Input
-                            placeholder="Search findings or record number"
-                            aria-label="Search findings"
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                          />
-                        </div>
-                        <Select
-                          value={filter}
-                          onValueChange={(v) => setFilter(String(v))}
+                      <div className="finished-links">
+                        <Button
+                          variant="ghost"
+                          onClick={() => {
+                            setFilter('all');
+                            setSelectedId('');
+                          }}
                         >
-                          <SelectTrigger aria-label="Filter findings">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All findings</SelectItem>
-                            <SelectItem value="repair">
-                              Supported repairs
-                            </SelectItem>
-                            <SelectItem value="review">Human review</SelectItem>
-                          </SelectContent>
-                        </Select>
+                          View reviewed items
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => setExportOpen(true)}
+                        >
+                          Report & other files <ArrowRight size={15} />
+                        </Button>
                       </div>
-                      <div className="finding-grid">
-                        <div className="finding-list">
+                      {decisions.length > 0 && (
+                        <Button variant="ghost" size="sm" onClick={undo}>
+                          <RotateCcw size={15} /> Undo last decision
+                        </Button>
+                      )}
+                    </section>
+                  ) : (
+                    <div className="review-grid">
+                      <aside className="suggestions">
+                        <div className="suggestion-tools">
+                          <Select
+                            value={filter}
+                            onValueChange={(v) => {
+                              setFilter(String(v));
+                              setSelectedId('');
+                              setNote('');
+                              setManual('');
+                            }}
+                          >
+                            <SelectTrigger aria-label="Which suggestions to show">
+                              <SelectValue>
+                                {filter === 'pending'
+                                  ? 'To review'
+                                  : filter === 'repair'
+                                    ? 'Suggested fixes'
+                                    : filter === 'review'
+                                      ? 'Needs a closer look'
+                                      : 'All items'}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="pending">To review</SelectItem>
+                              <SelectItem value="repair">
+                                Suggested fixes
+                              </SelectItem>
+                              <SelectItem value="review">
+                                Needs a closer look
+                              </SelectItem>
+                              <SelectItem value="all">All items</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <div className="searchfield">
+                            <Search size={16} />
+                            <Input
+                              aria-label="Search suggestions"
+                              placeholder="Find a row or column…"
+                              value={search}
+                              onChange={(e) => {
+                                setSearch(e.target.value);
+                                setSelectedId('');
+                                setNote('');
+                                setManual('');
+                              }}
+                            />
+                          </div>
+                        </div>
+                        <div className="suggestion-list">
                           {visible.map((f) => {
                             const d = decisions.find(
                               (d) => d.finding.id === f.id,
@@ -863,514 +990,565 @@ export default function Home() {
                             return (
                               <button
                                 key={f.id}
-                                className={`finding-item ${selected?.id === f.id ? 'selected' : ''}`}
-                                onClick={() => {
-                                  setSelectedId(f.id);
-                                  setNote('');
-                                  setManual('');
-                                }}
+                                onClick={() => chooseFinding(f.id)}
+                                aria-pressed={selected?.id === f.id}
+                                className={`suggestion-row ${selected?.id === f.id ? 'selected' : ''}`}
                               >
-                                <div className="finding-meta">
-                                  <span>
-                                    Record {String(f.rowId).padStart(3, '0')}
-                                  </span>
-                                  <span
-                                    className={`pill ${d ? 'good' : f.kind === 'repair' ? 'good' : 'warn'}`}
-                                  >
+                                <span
+                                  className={`suggestion-dot ${d ? 'reviewed' : f.patch ? 'fix' : 'look'}`}
+                                >
+                                  {d ? (
+                                    <CheckIcon size={15} />
+                                  ) : f.patch ? (
+                                    <Settings2 size={14} />
+                                  ) : (
+                                    <CircleHelp size={15} />
+                                  )}
+                                </span>
+                                <span>
+                                  <small>
+                                    Row {f.rowId} · {f.column}
+                                  </small>
+                                  <strong>{friendlyTitle(f)}</strong>
+                                  <em>
                                     {d
                                       ? d.action === 'apply'
-                                        ? 'Applied'
-                                        : 'Kept'
+                                        ? 'Updated'
+                                        : 'Kept as is'
                                       : label(f)}
-                                  </span>
-                                </div>
-                                <strong>{f.title}</strong>
-                                <span className="finding-column">
-                                  {f.column}
+                                  </em>
                                 </span>
+                                <ChevronRight size={16} />
                               </button>
                             );
                           })}
                           {!visible.length && (
-                            <div className="empty-evidence">
-                              <CheckCircle2 />
-                              <p>
-                                {busy
-                                  ? 'Waiting for measured evidence…'
-                                  : 'No findings match this view.'}
-                              </p>
+                            <div className="list-empty">
+                              <Search />
+                              <p>No matching items.</p>
+                              <Button
+                                variant="ghost"
+                                onClick={() => {
+                                  setSearch('');
+                                  setFilter('all');
+                                }}
+                              >
+                                Show all items
+                              </Button>
                             </div>
                           )}
                         </div>
-                        <div className="evidence-panel">
-                          {selected ? (
-                            <>
-                              <div className="detail-intro">
-                                <p className="eyebrow">
-                                  Record {selected.rowId} / {selected.column}
-                                </p>
-                                <h2>{selected.title}</h2>
-                                <p>{selected.detail}</p>
-                              </div>
-                              <div className="evidence-box">
-                                <h3>Evidence</h3>
-                                {selected.evidence.map((e, i) => (
-                                  <div className="evidence-line" key={i}>
-                                    <b>{i + 1}</b>
-                                    <p>{e}</p>
-                                  </div>
-                                ))}
-                              </div>
-                              {selected.patch && (
-                                <div className="change-preview">
-                                  <h3>Proposed change</h3>
-                                  {selected.patch.deleteRow ? (
-                                    <p>
-                                      Remove this extra record. The matching
-                                      first record stays.
-                                    </p>
-                                  ) : (
-                                    selected.patch.changes.map((c) => (
-                                      <div
-                                        className="change-line"
-                                        key={c.column}
-                                      >
-                                        <span>{data.headers[c.column]}</span>
-                                        <del>{c.before || '(empty)'}</del>
-                                        <ArrowRight size={16} />
+                      </aside>
+                      <section
+                        className="suggestion-detail"
+                        aria-label="Selected suggestion"
+                      >
+                        {selected ? (
+                          <>
+                            <div className="detail-top">
+                              <span
+                                className={`kind-label ${selected.patch ? 'fix' : 'look'}`}
+                              >
+                                {decision ? 'Reviewed' : label(selected)}
+                              </span>
+                              <span>
+                                Row {selected.rowId} <i>·</i> {selected.column}
+                              </span>
+                            </div>
+                            <h2 aria-live="polite" aria-atomic="true">
+                              {friendlyTitle(selected)}
+                            </h2>
+                            <p className="detail-description">
+                              {selected.detail}
+                            </p>
+                            {selected.patch ? (
+                              <div className="before-after">
+                                {selected.patch.deleteRow ? (
+                                  <>
+                                    <div>
+                                      <span>
+                                        {decision?.action === 'apply'
+                                          ? 'Before'
+                                          : 'Now'}
+                                      </span>
+                                      <strong>Two identical rows</strong>
+                                      <small>Same ID and the same values</small>
+                                    </div>
+                                    <ArrowRight />
+                                    <div className="after-value">
+                                      <span>
+                                        {decision?.action === 'apply'
+                                          ? 'After your change'
+                                          : 'After your approval'}
+                                      </span>
+                                      <strong>Keep one copy</strong>
+                                      <small>
+                                        {decision?.action === 'apply'
+                                          ? 'Removed'
+                                          : 'Remove'}{' '}
+                                        extra row {selected.rowId}
+                                      </small>
+                                    </div>
+                                  </>
+                                ) : (
+                                  selected.patch.changes.map((c) => (
+                                    <div
+                                      className="value-change"
+                                      key={c.column}
+                                    >
+                                      <div>
+                                        <span>
+                                          {data.headers[c.column]} ·{' '}
+                                          {decision?.action === 'apply'
+                                            ? 'before'
+                                            : 'now'}
+                                        </span>
+                                        <strong>{c.before || '(empty)'}</strong>
+                                      </div>
+                                      <ArrowRight />
+                                      <div className="after-value">
+                                        <span>
+                                          {decision?.action === 'apply'
+                                            ? 'Applied value'
+                                            : 'Suggested value'}
+                                        </span>
                                         <strong>{c.after}</strong>
                                       </div>
-                                    ))
-                                  )}
-                                </div>
-                              )}
-                              {decision ? (
-                                <div className="decision-done">
-                                  <CheckCircle2 />
-                                  <div>
-                                    <strong>
-                                      {decision.action === 'apply'
-                                        ? 'Applied to working copy'
-                                        : 'Kept unchanged'}
-                                    </strong>
-                                    <p>
-                                      {decision.note ||
-                                        'Approved the evidence-backed proposal.'}
-                                    </p>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="review-actions">
-                                  <label className="field">
-                                    Reviewer note{' '}
-                                    {selected.patch
-                                      ? '(optional for a repair)'
-                                      : '/ source evidence'}
-                                    <Textarea
-                                      value={note}
-                                      onChange={(e) => setNote(e.target.value)}
-                                      placeholder="Explain your decision or cite the source…"
-                                    />
-                                  </label>
-                                  <div className="actions">
-                                    {selected.patch && (
-                                      <Button
-                                        disabled={busy}
-                                        onClick={() => decide('apply')}
-                                      >
-                                        <CheckIcon /> Apply repair
-                                      </Button>
-                                    )}
-                                    <Button
-                                      variant="outline"
-                                      disabled={busy}
-                                      onClick={() => decide('keep')}
-                                    >
-                                      Keep unchanged
-                                    </Button>
-                                  </div>
-                                  {!selected.patch && (
-                                    <div className="manual-edit">
-                                      <label
-                                        className="field"
-                                        htmlFor="manual-value"
-                                      >
-                                        Source-verified replacement
-                                        <Input
-                                          id="manual-value"
-                                          value={manual}
-                                          onChange={(e) =>
-                                            setManual(e.target.value)
-                                          }
-                                          placeholder="Only if the source proves a correction"
-                                        />
-                                      </label>
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={busy}
-                                        onClick={() => decide('apply', true)}
-                                      >
-                                        Apply source correction
-                                      </Button>
                                     </div>
-                                  )}
+                                  ))
+                                )}
+                              </div>
+                            ) : (
+                              <div className="review-callout">
+                                <CircleHelp size={22} />
+                                <div>
+                                  <strong>This one needs your judgment.</strong>
+                                  <p>
+                                    {selected.check === 'outliers'
+                                      ? 'Unusual doesn’t always mean incorrect. Keep it if it matches your records.'
+                                      : 'We can show what looks unusual, but the correct value needs to come from your source.'}
+                                  </p>
                                 </div>
-                              )}
-                            </>
-                          ) : (
-                            <div className="empty-evidence">
-                              <ShieldCheck />
-                              <h3>No unsupported edits.</h3>
-                              <p>Select a finding to inspect its evidence.</p>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </>
+                              </div>
+                            )}
+                            <Accordion
+                              className="evidence-accordion"
+                              defaultValue={[]}
+                            >
+                              <AccordionItem value="evidence">
+                                <AccordionTrigger>
+                                  Why{' '}
+                                  {selected.patch
+                                    ? 'this suggestion'
+                                    : 'was this flagged'}
+                                  ?
+                                </AccordionTrigger>
+                                <AccordionContent>
+                                  <ol>
+                                    {selected.evidence.map((e, i) => (
+                                      <li key={i}>{e}</li>
+                                    ))}
+                                  </ol>
+                                </AccordionContent>
+                              </AccordionItem>
+                            </Accordion>
+                            {decision ? (
+                              <div className="saved-decision">
+                                <CheckCircle2 size={20} />
+                                <div>
+                                  <strong>
+                                    {decision.action === 'apply'
+                                      ? 'Change applied'
+                                      : 'Kept as is'}
+                                  </strong>
+                                  <p>
+                                    {decision.note ||
+                                      'You approved this suggestion.'}
+                                  </p>
+                                </div>
+                                {decisions.at(-1)?.id === decision.id && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={undo}
+                                  >
+                                    Undo
+                                  </Button>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="review-actions">
+                                <label
+                                  className="field note-field"
+                                  htmlFor="review-note"
+                                >
+                                  Add a note <span>(optional)</span>
+                                  <Textarea
+                                    id="review-note"
+                                    value={note}
+                                    onChange={(e) => setNote(e.target.value)}
+                                    placeholder="Anything you’d like to remember about this decision…"
+                                    rows={2}
+                                  />
+                                </label>
+                                <div className="decision-buttons">
+                                  {selected.patch && (
+                                    <Button
+                                      className="primary-large"
+                                      onClick={() => decide('apply')}
+                                    >
+                                      <CheckIcon /> Apply this fix
+                                    </Button>
+                                  )}
+                                  <Button
+                                    className={
+                                      selected.patch
+                                        ? 'keep-button'
+                                        : 'primary-large'
+                                    }
+                                    variant={
+                                      selected.patch ? 'outline' : 'default'
+                                    }
+                                    onClick={() => decide('keep')}
+                                  >
+                                    Keep as is
+                                    {!selected.patch && (
+                                      <ArrowRight size={16} />
+                                    )}
+                                  </Button>
+                                </div>
+                                <p className="undo-hint">
+                                  <RotateCcw size={13} /> You can undo a
+                                  decision at any time in Changes.
+                                </p>
+                                {!selected.patch && (
+                                  <Accordion className="manual-accordion">
+                                    <AccordionItem value="manual">
+                                      <AccordionTrigger>
+                                        I know the correct value
+                                      </AccordionTrigger>
+                                      <AccordionContent>
+                                        <p>
+                                          Use a value you verified against your
+                                          source. Add the source to your note
+                                          above.
+                                        </p>
+                                        <label
+                                          className="field"
+                                          htmlFor="manual-value"
+                                        >
+                                          Correct value
+                                          <Input
+                                            id="manual-value"
+                                            value={manual}
+                                            onChange={(e) =>
+                                              setManual(e.target.value)
+                                            }
+                                            placeholder="Enter the value from your source"
+                                          />
+                                        </label>
+                                        <Button
+                                          variant="outline"
+                                          onClick={() => decide('apply', true)}
+                                        >
+                                          Save my correction
+                                        </Button>
+                                      </AccordionContent>
+                                    </AccordionItem>
+                                  </Accordion>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="empty-detail">
+                            <CheckCircle2 />
+                            <h2>Choose an item to take a closer look.</h2>
+                          </div>
+                        )}
+                      </section>
+                    </div>
                   )}
                 </TabsContent>
                 <TabsContent value="dataset">
-                  <div className="panelhead">
-                    <h2>Working copy</h2>
-                    <span className="pill">{data.rows.length} records</span>
-                  </div>
-                  <div className="dataset-scroll">
-                    <Table className="data-table">
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Record</TableHead>
-                          {data.headers.map((h) => (
-                            <TableHead key={h}>{h}</TableHead>
-                          ))}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {data.rows.slice(0, 200).map((r) => (
-                          <TableRow key={r.id}>
-                            <TableCell className="rownum">{r.id}</TableCell>
-                            {r.cells.map((c, i) => (
-                              <TableCell
-                                key={i}
-                                className={
-                                  original.rows.find((o) => o.id === r.id)
-                                    ?.cells[i] !== c
-                                    ? 'changed-cell'
-                                    : ''
-                                }
-                              >
-                                {c === '' ? (
-                                  <span className="missing-cell">empty</span>
-                                ) : (
-                                  c
-                                )}
-                              </TableCell>
+                  <section className="data-card">
+                    <div className="panelhead">
+                      <div>
+                        <h2>Your updated spreadsheet</h2>
+                        <p>Changes you approved are highlighted.</p>
+                      </div>
+                      <span className="quiet-tag">{data.rows.length} rows</span>
+                    </div>
+                    <div className="dataset-scroll">
+                      <Table className="data-table">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Row</TableHead>
+                            {data.headers.map((h) => (
+                              <TableHead key={h}>{h}</TableHead>
                             ))}
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                  <p className="footnote panelbody">
-                    Stable record numbers refer to parsed source records,
-                    excluding the header.{' '}
-                    {data.rows.length > 200
-                      ? 'Showing the first 200 records; every record is audited.'
-                      : ''}{' '}
-                    Highlighted cells contain approved changes.
-                  </p>
-                </TabsContent>
-                <TabsContent value="trace">
-                  {summary && (
-                    <div className="summary-box">
-                      <p className="eyebrow">Investigation summary</p>
-                      <p>{summary}</p>
+                        </TableHeader>
+                        <TableBody>
+                          {data.rows.slice(0, 200).map((r) => (
+                            <TableRow key={r.id}>
+                              <TableCell className="rownum">{r.id}</TableCell>
+                              {r.cells.map((c, i) => (
+                                <TableCell
+                                  key={i}
+                                  className={
+                                    original.rows.find((o) => o.id === r.id)
+                                      ?.cells[i] !== c
+                                      ? 'changed-cell'
+                                      : ''
+                                  }
+                                >
+                                  {c || (
+                                    <span className="missing-cell">empty</span>
+                                  )}
+                                </TableCell>
+                              ))}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
                     </div>
-                  )}
-                  <ol className="trace-list">
-                    {traces.map((t, i) => (
-                      <li key={i}>
-                        <span className="trace-number">{i + 1}</span>
-                        <div>
-                          <strong>{t.tool}</strong>
-                          <p>{t.summary}</p>
-                          <small>{new Date(t.at).toLocaleTimeString()}</small>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                  {!traces.length && (
-                    <div className="empty-evidence">
-                      <FlaskConical />
-                      <p>Run an investigation to see its actual tool calls.</p>
-                    </div>
-                  )}
+                    <p className="table-note">
+                      Row numbers refer to the original file, without its
+                      header.{' '}
+                      {data.rows.length > 200
+                        ? 'Showing 200 rows; all rows were checked.'
+                        : ''}
+                    </p>
+                  </section>
                 </TabsContent>
                 <TabsContent value="ledger">
-                  <div className="panelhead">
-                    <h2>{decisions.length} recorded decisions</h2>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!decisions.length || busy}
-                      onClick={undo}
-                    >
-                      <RotateCcw /> Undo last decision
-                    </Button>
-                  </div>
-                  <div className="ledger-list">
-                    {decisions.map((d) => (
-                      <article key={d.id}>
-                        <div className="finding-meta">
-                          <span>Record {d.finding.rowId}</span>
-                          <span className="pill good">
-                            {d.action === 'apply'
-                              ? 'Applied'
-                              : 'Kept unchanged'}
-                          </span>
-                        </div>
-                        <h3>{d.finding.title}</h3>
+                  <section className="data-card">
+                    <div className="panelhead">
+                      <div>
+                        <h2>Your decisions</h2>
                         <p>
-                          {d.note || 'Approved the evidence-backed proposal.'}
+                          {applied} updates ·{' '}
+                          {decisions.filter((d) => d.action === 'keep').length}{' '}
+                          kept as is
                         </p>
-                        <small>{new Date(d.at).toLocaleString()}</small>
-                      </article>
-                    ))}
-                  </div>
-                  {!decisions.length && (
-                    <div className="empty-evidence">
-                      <ShieldCheck />
-                      <p>
-                        Your decisions will appear here, with evidence and an
-                        undo path.
-                      </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        disabled={!decisions.length}
+                        onClick={undo}
+                      >
+                        <RotateCcw /> Undo last decision
+                      </Button>
                     </div>
-                  )}
+                    {decisions.length ? (
+                      <div className="ledger-list">
+                        {decisions.map((d) => (
+                          <article key={d.id}>
+                            <span className="ledger-icon">
+                              <CheckIcon size={18} />
+                            </span>
+                            <div>
+                              <small>
+                                Row {d.finding.rowId} · {d.finding.column}
+                              </small>
+                              <h3>{friendlyTitle(d.finding)}</h3>
+                              <p>{d.note || 'You approved this change.'}</p>
+                            </div>
+                            <span className="quiet-tag">
+                              {d.action === 'apply' ? 'Updated' : 'Kept as is'}
+                            </span>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="empty-detail">
+                        <History />
+                        <h2>Your changes will appear here.</h2>
+                        <p>
+                          Review a suggestion to get started. Your original
+                          stays unchanged.
+                        </p>
+                        <Button onClick={() => setTab('findings')}>
+                          Review suggestions <ArrowRight size={16} />
+                        </Button>
+                      </div>
+                    )}
+                  </section>
+                </TabsContent>
+                <TabsContent value="trace">
+                  <section className="data-card details-card">
+                    <div className="panelhead">
+                      <div>
+                        <h2>Behind the check</h2>
+                        <p>A record of what ran and what it found.</p>
+                      </div>
+                      <span className="quiet-tag">
+                        {traces.some((t) => t.tool === 'model_choose_check')
+                          ? 'AI-assisted check'
+                          : 'Rules-based check'}
+                      </span>
+                    </div>
+                    <div className="details-body">
+                      <p>{summary}</p>
+                      <div className="detail-tools">
+                        <Button
+                          variant="outline"
+                          disabled={!!answerKey.length}
+                          onClick={() =>
+                            investigate(model.configured ? 'ai' : 'rules')
+                          }
+                        >
+                          <RotateCcw /> Check file again
+                        </Button>
+                        {model.configured && (
+                          <Button
+                            variant="outline"
+                            disabled={!!answerKey.length}
+                            onClick={() => investigate('rules')}
+                          >
+                            Compare with rules only
+                          </Button>
+                        )}
+                      </div>
+                      <Accordion>
+                        <AccordionItem value="checks">
+                          <AccordionTrigger>
+                            View check history
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <ol className="trace-list">
+                              {traces.map((t, i) => (
+                                <li key={i}>
+                                  <span className="trace-number">{i + 1}</span>
+                                  <div>
+                                    <strong>
+                                      {CHECK_LABELS[t.tool as Check] ||
+                                        t.tool.replaceAll('_', ' ')}
+                                    </strong>
+                                    <p>{t.summary}</p>
+                                  </div>
+                                </li>
+                              ))}
+                            </ol>
+                          </AccordionContent>
+                        </AccordionItem>
+                        <AccordionItem value="technical">
+                          <AccordionTrigger>Advanced details</AccordionTrigger>
+                          <AccordionContent>
+                            <p>
+                              {model.configured
+                                ? `Available AI connection: ${model.provider} · ${model.model}`
+                                : 'This version runs the checks in your browser without a language model.'}
+                            </p>
+                            <p>
+                              For an independent evaluation, reveal a
+                              human-prepared answer key after the first check.
+                              This is optional and isn’t needed to tidy your
+                              file.
+                            </p>
+                            <Button
+                              variant="outline"
+                              onClick={() => setKeyOpen(true)}
+                            >
+                              <FlaskConical /> Compare an answer key
+                            </Button>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
+                    </div>
+                  </section>
                 </TabsContent>
               </Tabs>
-            </div>
-            <div className="bottomline">
-              <span>
-                <ShieldCheck size={14} /> Original → working copy → documented
-                decisions
-              </span>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={!ran || busy}
-                onClick={() => setKeyOpen(true)}
-              >
-                <FlaskConical /> Human answer key
-              </Button>
-            </div>
-          </section>
-        </div>
-      </div>
-      <Dialog open={ruleOpen} onOpenChange={setRuleOpen}>
-        <DialogContent className="wide-dialog">
-          <DialogHeader>
-            <DialogTitle>Define what the data means</DialogTitle>
-            <DialogDescription>
-              Column mappings are suggestions. Enable repairs only when these
-              rules are true for your source.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rules-grid">
-            <section>
-              <h3>Record identity</h3>
-              <MapField
-                label="ID column"
-                value={draft.idColumn}
-                headers={data.headers}
-                onChange={(v) => setDraftField('idColumn', v)}
-              />
-              <Toggle
-                text="Each ID must identify exactly one record"
-                value={draft.uniqueIds}
-                onChange={(v) => setDraftField('uniqueIds', v)}
-              />
-              <h3>Missing quantity</h3>
-              {(['quantityColumn', 'priceColumn', 'totalColumn'] as const).map(
-                (k, i) => (
-                  <MapField
-                    key={k}
-                    label={['Quantity', 'Unit price', 'Total'][i]}
-                    value={draft[k]}
-                    headers={data.headers}
-                    onChange={(v) => setDraftField(k, v)}
-                  />
-                ),
-              )}
-              <Toggle
-                text="Total = quantity × price; price and total are trusted, with no tax, discount, or refund"
-                value={draft.arithmetic}
-                onChange={(v) => setDraftField('arithmetic', v)}
-              />
-              <label className="field" htmlFor="missing-tokens">
-                Missing tokens, separated by commas
-                <Input
-                  id="missing-tokens"
-                  value={draft.missingTokens.filter(Boolean).join(',')}
-                  onChange={(e) =>
-                    setDraftField('missingTokens', [
-                      '',
-                      ...e.target.value
-                        .split(',')
-                        .map((s) => s.trim())
-                        .filter(Boolean),
-                    ])
-                  }
-                />
-              </label>
-              <h3>Calendar dates</h3>
-              <MapField
-                label="Date column (YYYY-MM-DD)"
-                value={draft.dateColumn}
-                headers={data.headers}
-                onChange={(v) => setDraftField('dateColumn', v)}
-              />
-            </section>
-            <section>
-              <h3>Approved categories</h3>
-              <MapField
-                label="Category column"
-                value={draft.categoryColumn}
-                headers={data.headers}
-                onChange={(v) => setDraftField('categoryColumn', v)}
-              />
-              <label className="field" htmlFor="canonical-labels">
-                Canonical labels, separated by commas
-                <Input
-                  id="canonical-labels"
-                  value={draft.categories.join(',')}
-                  onChange={(e) =>
-                    setDraftField(
-                      'categories',
-                      e.target.value.split(',').filter(Boolean),
-                    )
-                  }
-                />
-              </label>
-              <Toggle
-                text="These labels are authoritative; normalize spaces and letter case"
-                value={draft.normalizeCategories}
-                onChange={(v) => setDraftField('normalizeCategories', v)}
-              />
-              <h3>Explicit mass units</h3>
-              <MapField
-                label="Mass value"
-                value={draft.valueColumn}
-                headers={data.headers}
-                onChange={(v) => setDraftField('valueColumn', v)}
-              />
-              <MapField
-                label="Unit column"
-                value={draft.unitColumn}
-                headers={data.headers}
-                onChange={(v) => setDraftField('unitColumn', v)}
-              />
-              <label className="field" htmlFor="target-unit">
-                Target unit
-                <Select
-                  value={draft.targetUnit}
-                  onValueChange={(v) =>
-                    setDraftField('targetUnit', v as 'kg' | 'g')
-                  }
-                >
-                  <SelectTrigger id="target-unit" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="kg">Kilograms (kg)</SelectItem>
-                    <SelectItem value="g">Grams (g)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </label>
-              <Toggle
-                text="The source unit is reliable; convert grams / kilograms together with the value"
-                value={draft.convertUnits}
-                onChange={(v) => setDraftField('convertUnits', v)}
-              />
-              <h3>Unusual values</h3>
-              <MapField
-                label="Numeric column"
-                value={draft.outlierColumn}
-                headers={data.headers}
-                onChange={(v) => setDraftField('outlierColumn', v)}
-              />
-              <Toggle
-                text="Flag 1.5 × IQR outliers for human review"
-                value={draft.checkOutliers}
-                onChange={(v) => setDraftField('checkOutliers', v)}
-              />
-            </section>
-          </div>
-          {error && (
-            <p className="error-text" role="alert">
-              {error}
-            </p>
+              <div className="workspace-foot">
+                <span>
+                  <ShieldCheck size={15} /> Your original stays unchanged.
+                </span>
+                <span>Download your results before closing this tab.</span>
+              </div>
+            </>
           )}
-          <div className="dialog-actions">
-            <Button variant="outline" onClick={() => setRuleOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={saveRules}>Save data rules</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      )}
+      <footer className="app-footer">
+        <span>Small fixes. Clear explanations. Your call.</span>
+        <span>
+          {STATIC_DEMO
+            ? 'Your CSV stays in your browser.'
+            : 'Changes only happen with your approval.'}
+        </span>
+      </footer>
+      <CheckSettings
+        open={ruleOpen}
+        onOpenChange={setRuleOpen}
+        headers={data.headers}
+        draft={draft}
+        setDraft={setDraft}
+        onSave={saveRules}
+        error={error}
+      />
       <Dialog open={exportOpen} onOpenChange={setExportOpen}>
         <DialogContent className="export-dialog">
           <DialogHeader>
-            <DialogTitle>Take the evidence with you</DialogTitle>
+            <DialogTitle>Ready to take your file with you?</DialogTitle>
             <DialogDescription>
-              Only approved repairs enter the cleaned CSV. Unresolved findings
-              remain visible in the report.
+              {pending.length
+                ? `${pending.length} item${pending.length === 1 ? ' is' : 's are'} still waiting for review. Your download includes only the changes you approved.`
+                : 'Your updated copy includes the changes you approved. The original is unchanged.'}
             </DialogDescription>
           </DialogHeader>
+          <Button
+            className="export-main"
+            onClick={() => download(exportName, toCSV(data))}
+          >
+            <Download size={24} />
+            <span>
+              <strong>Download updated CSV</strong>
+              <small>
+                {data.rows.length} rows · {applied} approved changes
+              </small>
+            </span>
+            <ArrowRight />
+          </Button>
+          <p className="export-more-label">Need the details, too?</p>
           {[
             [
-              'Cleaned CSV',
-              'The current working copy',
-              'cleaned.csv',
-              () => toCSV(data),
-              'text/csv',
-            ],
-            [
-              'Change ledger',
-              'Before, after, evidence and reviewer notes',
-              'change-ledger.csv',
-              () => ledgerCSV(original, decisions),
-              'text/csv',
-            ],
-            [
-              'Audit report',
-              'A printable report of findings, decisions and rules',
-              'audit-report.html',
+              'Review report',
+              'Suggestions, decisions, and explanations',
+              'review-report.html',
               () =>
                 reportHTML(original, data, rules, decisions, traces, summary),
               'text/html',
             ],
             [
-              'Untouched original',
-              'The exact CSV content you started with',
+              'List of changes',
+              'Before and after values with your notes',
+              'changes.csv',
+              () => ledgerCSV(original, decisions),
+              'text/csv',
+            ],
+            [
+              'Original file',
+              'Exactly the file you started with',
               original.name,
               () => original.original,
               'text/csv',
             ],
-          ].map(([title, desc, name, body, mime]) => (
+          ].map(([title, description, name, body, mime]) => (
             <Button
               key={String(title)}
-              variant="outline"
-              className="export-option"
+              variant="ghost"
+              className="export-secondary"
               onClick={() =>
                 download(String(name), (body as () => string)(), String(mime))
               }
             >
-              <Download />
+              <FileSpreadsheet />
               <span>
                 <strong>{String(title)}</strong>
-                <small>{String(desc)}</small>
+                <small>{String(description)}</small>
               </span>
+              <Download size={16} />
             </Button>
           ))}
         </DialogContent>
@@ -1378,18 +1556,18 @@ export default function Home() {
       <Dialog open={keyOpen} onOpenChange={setKeyOpen}>
         <DialogContent className="wide-dialog">
           <DialogHeader>
-            <DialogTitle>Compare against a human-held answer key</DialogTitle>
+            <DialogTitle>Compare an answer key</DialogTitle>
             <DialogDescription>
-              Reveal only after the investigation. The comparison uses frozen
-              findings from the first completed investigation, and locks further
-              investigations for this case.
+              This optional evaluation compares a human-prepared key with the
+              first completed check. Revealing it locks further checks for this
+              file.
             </DialogDescription>
           </DialogHeader>
-          <p className="footnote">
-            CSV columns: <code>row,check,truth</code>. Row is the stable source
-            record number; truth is <code>defect</code> or <code>valid</code>.
-            Checks: {CHECKS.join(', ')}. Use independently prepared labels; the
-            practice case is not a blind benchmark.
+          <p className="setting-help">
+            CSV columns: <code>row,check,truth</code>. Row is the original
+            record number, without the header. Truth is <code>defect</code> or{' '}
+            <code>valid</code>. Supported checks: {CHECKS.join(', ')}. The
+            included example isn’t a blind benchmark.
           </p>
           <input
             ref={keyRef}
@@ -1410,11 +1588,9 @@ export default function Home() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  {['Record', 'Check', 'Human truth', 'Observed result'].map(
-                    (h) => (
-                      <TableHead key={h}>{h}</TableHead>
-                    ),
-                  )}
+                  {['Row', 'Check', 'Expected', 'Observed'].map((h) => (
+                    <TableHead key={h}>{h}</TableHead>
+                  ))}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1433,68 +1609,71 @@ export default function Home() {
         </DialogContent>
       </Dialog>
       <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
-        <DialogContent>
+        <DialogContent className="guide-dialog">
           <DialogHeader>
-            <DialogTitle>From messy data to a defensible decision</DialogTitle>
+            <DialogTitle>A clearer spreadsheet in three steps</DialogTitle>
             <DialogDescription>
-              The investigator proposes. Evidence supports. You approve.
+              You don’t need to be a data expert. We’ll explain each suggestion
+              as you go.
             </DialogDescription>
           </DialogHeader>
           <ol className="help-list">
             <li>
-              <b>1. Profile</b>
-              <p>
-                Load a CSV and confirm its rules. Missing tokens and column
-                meanings come from the source.
-              </p>
+              <span>1</span>
+              <div>
+                <b>Add your file</b>
+                <p>
+                  Choose a CSV, or try the café example. If you use Excel or
+                  Google Sheets, save or download your spreadsheet as CSV first.
+                </p>
+              </div>
             </li>
             <li>
-              <b>2. Inspect</b>
-              <p>
-                The AI chooses checks when connected. Deterministic tools
-                measure the records and return evidence.
-              </p>
+              <span>2</span>
+              <div>
+                <b>Check it, then review</b>
+                <p>
+                  We’ll show possible fixes, along with before and after values.
+                  Apply a fix or keep things as they are. Use “Why this
+                  suggestion?” to see the evidence.
+                </p>
+              </div>
             </li>
             <li>
-              <b>3. Review</b>
-              <p>
-                Approve exact repairs, supply a source-verified correction, or
-                keep an unusual value with a reason.
-              </p>
-            </li>
-            <li>
-              <b>4. Re-check & export</b>
-              <p>
-                Every decision triggers the configured checks again. Undo
-                restores the prior data; export saves the result and reasoning.
-              </p>
+              <span>3</span>
+              <div>
+                <b>Download your updated copy</b>
+                <p>
+                  You can undo decisions in Changes. When you’re ready, download
+                  your CSV and an optional report.
+                </p>
+              </div>
             </li>
           </ol>
-          <p>
+          <div className="guide-note">
+            <ShieldCheck size={20} />
+            <p>
+              Your original file is always kept unchanged. Download your work
+              before you close or refresh the tab.
+            </p>
+          </div>
+          <p className="guide-links">
             <a
-              className="text-primary underline"
               href={publicAsset('cleanroom-detective-explainer.pdf')}
               target="_blank"
               rel="noreferrer"
             >
-              Open the visual explanation (PDF)
-            </a>{' '}
-            ·{' '}
-            <a
-              className="text-primary underline"
-              href={publicAsset('cleanroom-detective-explainer.tex')}
-              download
-            >
+              Visual explanation (PDF)
+            </a>
+            <a href={publicAsset('cleanroom-detective-explainer.tex')} download>
               LaTeX source
             </a>
           </p>
-          <p className="footnote">
+          <small className="mode-note">
             {STATIC_DEMO
-              ? 'This shared demo runs the rules audit without a language model. Your CSV stays in this tab. '
-              : 'AI receives bounded numerical statistics and check outcomes, not raw CSV cells. Rules audits stay in your tab. '}
-            For a real evaluation, keep the human answer key hidden until the
-            first investigation completes.
-          </p>
+              ? 'This shared version runs rule-based checks entirely in your browser.'
+              : 'When connected, AI chooses the checks. The checks supply the evidence; you decide what changes.'}
+          </small>
         </DialogContent>
       </Dialog>
     </main>

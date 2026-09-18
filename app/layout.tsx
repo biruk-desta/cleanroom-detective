@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Cleanroom Detective | Evidence-led CSV audits',
+  title: 'Cleanroom Detective | A clearer spreadsheet',
   description:
-    'Investigate messy data, inspect evidence, and make reversible repairs with a human in the loop.',
+    'Tidy your spreadsheet one suggestion at a time. Review clear before-and-after changes, then download an updated copy.',
 };
 
 export default function RootLayout({
