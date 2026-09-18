@@ -1,5 +1,13 @@
 'use client';
-import { useId } from 'react';
+import { useId, useState } from 'react';
+import {
+  optionsFor,
+  DOMAINS,
+  suggestOptions,
+  type AuditOptions,
+} from '@/lib/audit-options';
+import { validateRules } from '@/lib/audit';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
@@ -96,6 +104,26 @@ export function CheckSettings({
 }) {
   const field = <K extends keyof Rules>(key: K, value: Rules[K]) =>
     setDraft((r) => ({ ...r, [key]: value }));
+  const a = optionsFor(draft);
+  const option = <K extends keyof AuditOptions>(
+    key: K,
+    value: AuditOptions[K],
+  ) => field('audit', { ...a, [key]: value });
+  const [profileName, setProfileName] = useState('');
+  const [profiles, setProfiles] = useState<{ name: string; rules: Rules }[]>(
+    () => {
+      if (typeof window === 'undefined') return [];
+      try {
+        const saved = JSON.parse(
+          localStorage.getItem('cleanroom-profiles-v1') || '[]',
+        );
+        return Array.isArray(saved) ? saved.slice(0, 5) : [];
+      } catch {
+        return [];
+      }
+    },
+  );
+  const [profileMessage, setProfileMessage] = useState('');
   const state = (active: boolean) => (
     <span className={`setting-state ${active ? 'enabled' : ''}`}>
       {active ? 'On' : 'Not set'}
@@ -111,11 +139,250 @@ export function CheckSettings({
             adjust it. Extra repair options need your confirmation.
           </DialogDescription>
         </DialogHeader>
+        <div className="audit-setup">
+          <label className="field" htmlFor="audit-goal">
+            What would you like to find?
+            <Textarea
+              id="audit-goal"
+              rows={2}
+              maxLength={1000}
+              value={a.goal}
+              placeholder="For example: Check employee emails and missing IDs"
+              onChange={(e) => option('goal', e.target.value)}
+            />
+          </label>
+          <div className="settings-columns">
+            <label className="field" htmlFor="audit-domain">
+              Type of data
+              <select
+                id="audit-domain"
+                className="large-select"
+                value={a.domain}
+                onChange={(e) =>
+                  option('domain', e.target.value as AuditOptions['domain'])
+                }
+              >
+                {Object.entries(DOMAINS).map(([key, name]) => (
+                  <option key={key} value={key}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field" htmlFor="audit-sensitivity">
+              Unusual-value sensitivity
+              <select
+                id="audit-sensitivity"
+                className="large-select"
+                value={a.sensitivity}
+                onChange={(e) =>
+                  option(
+                    'sensitivity',
+                    e.target.value as AuditOptions['sensitivity'],
+                  )
+                }
+              >
+                <option value="broad">Broad scan · 1 × IQR</option>
+                <option value="balanced">Balanced · 1.5 × IQR</option>
+                <option value="strict">High confidence · 3 × IQR</option>
+              </select>
+            </label>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setDraft(suggestOptions(headers, draft, a.goal, a.domain));
+              setProfileMessage(
+                'Suggestions are ready below. Review them, then save your checks. No repairs were enabled automatically.',
+              );
+            }}
+          >
+            Suggest my audit plan
+          </Button>
+          <p className="setting-help">
+            Local suggestions match familiar words and column names. Numeric
+            limits, correct labels, and business assumptions come from you.
+            Sensitivity changes the outlier threshold only.
+          </p>
+        </div>
         <Accordion
           defaultValue={[]}
           multiple={false}
           className="settings-accordion"
         >
+          <AccordionItem value="custom-rules">
+            <AccordionTrigger>
+              <span>
+                <b>Your rules & limits</b>
+                <small>Required fields, email checks, and numeric ranges</small>
+              </span>
+              {state(!!a.required.length || !!a.emailColumn || !!a.rangeColumn)}
+            </AccordionTrigger>
+            <AccordionContent>
+              <p className="setting-help">
+                Select fields that must contain a value.
+              </p>
+              <div className="required-columns">
+                {headers.map((h) => (
+                  <Confirm
+                    key={h}
+                    checked={a.required.includes(h)}
+                    onChange={(v) =>
+                      option(
+                        'required',
+                        v
+                          ? [...a.required, h]
+                          : a.required.filter((c) => c !== h),
+                      )
+                    }
+                  >
+                    {h}
+                  </Confirm>
+                ))}
+              </div>
+              <Column
+                label="Email column (optional)"
+                value={a.emailColumn}
+                headers={headers}
+                onChange={(v) => option('emailColumn', v)}
+              />
+              <p className="setting-help">
+                Checks the address structure only. It does not prove the mailbox
+                exists or contact anyone.
+              </p>
+              <Column
+                label="Numeric column (optional)"
+                value={a.rangeColumn}
+                headers={headers}
+                onChange={(v) => option('rangeColumn', v)}
+              />
+              <div className="settings-columns">
+                <label className="field" htmlFor="minimum">
+                  Minimum
+                  <Input
+                    id="minimum"
+                    type="number"
+                    value={a.minimum ?? ''}
+                    onChange={(e) =>
+                      option(
+                        'minimum',
+                        e.target.value === '' ? null : Number(e.target.value),
+                      )
+                    }
+                  />
+                </label>
+                <label className="field" htmlFor="maximum">
+                  Maximum
+                  <Input
+                    id="maximum"
+                    type="number"
+                    value={a.maximum ?? ''}
+                    onChange={(e) =>
+                      option(
+                        'maximum',
+                        e.target.value === '' ? null : Number(e.target.value),
+                      )
+                    }
+                  />
+                </label>
+              </div>
+              <label className="field" htmlFor="custom-severity">
+                Priority for violations of these rules
+                <select
+                  id="custom-severity"
+                  className="large-select"
+                  value={a.severity}
+                  onChange={(e) =>
+                    option(
+                      'severity',
+                      e.target.value as AuditOptions['severity'],
+                    )
+                  }
+                >
+                  {['low', 'medium', 'high', 'critical'].map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </AccordionContent>
+          </AccordionItem>
+          <AccordionItem value="profiles">
+            <AccordionTrigger>
+              <span>
+                <b>Reusable audit profiles</b>
+                <small>Save these choices on this device</small>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <label className="field" htmlFor="profile-name">
+                Profile name
+                <Input
+                  id="profile-name"
+                  value={profileName}
+                  maxLength={60}
+                  onChange={(e) => setProfileName(e.target.value)}
+                />
+              </label>
+              <Button
+                variant="outline"
+                disabled={!profileName.trim()}
+                onClick={() => {
+                  try {
+                    validateRules(draft, headers);
+                    const next = [
+                      { name: profileName.trim(), rules: draft },
+                      ...profiles.filter((p) => p.name !== profileName.trim()),
+                    ].slice(0, 5);
+                    localStorage.setItem(
+                      'cleanroom-profiles-v1',
+                      JSON.stringify(next),
+                    );
+                    setProfiles(next);
+                    setProfileMessage('Profile saved on this device.');
+                  } catch (e) {
+                    setProfileMessage((e as Error).message);
+                  }
+                }}
+              >
+                Save profile
+              </Button>
+              {profiles.map((p) => (
+                <Button
+                  key={p.name}
+                  variant="ghost"
+                  onClick={() => {
+                    try {
+                      validateRules(p.rules, headers);
+                      setDraft(p.rules);
+                      setProfileMessage(
+                        'Profile loaded. Review the rules before saving.',
+                      );
+                    } catch {
+                      setProfileMessage(
+                        'This profile uses different column names. Adjust the checks for this file.',
+                      );
+                    }
+                  }}
+                >
+                  {p.name}
+                </Button>
+              ))}
+              {!!profiles.length && (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    localStorage.removeItem('cleanroom-profiles-v1');
+                    setProfiles([]);
+                    setProfileMessage('Saved profiles removed.');
+                  }}
+                >
+                  Clear saved profiles
+                </Button>
+              )}
+            </AccordionContent>
+          </AccordionItem>
           <AccordionItem value="identity">
             <AccordionTrigger>
               <span>
@@ -351,6 +618,9 @@ export function CheckSettings({
             </AccordionContent>
           </AccordionItem>
         </Accordion>
+        {profileMessage && (
+          <output className="setting-help">{profileMessage}</output>
+        )}
         {error && (
           <p className="error-text" role="alert">
             {error}
@@ -361,7 +631,7 @@ export function CheckSettings({
             Cancel
           </Button>
           <Button onClick={onSave}>
-            Save checks <span aria-hidden="true">✓</span>
+            Confirm audit plan <span aria-hidden="true">✓</span>
           </Button>
         </div>
       </DialogContent>

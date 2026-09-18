@@ -34,7 +34,11 @@ export type LargeJob = {
   progress: number;
   summary: LargeSummary | null;
 };
-export type LargeFinding = Finding & { fingerprint: string; reviewed: boolean };
+export type LargeFinding = Finding & {
+  priority: number;
+  fingerprint: string;
+  reviewed: boolean;
+};
 export type LargeSession = {
   username: string;
   maxUploadBytes: number;

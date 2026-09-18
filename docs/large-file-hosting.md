@@ -2,7 +2,7 @@
 
 ## Current status
 
-The private, disk-backed workspace is implemented and tested locally. The public GitHub Pages demo still uses the original browser-only 1 MB / 5,000-row limit. Cloudflare R2 is **not activated or connected**, and the large-file workspace is **not publicly deployed**.
+Storage work was paused again at the owner’s request during the team-document review. The private, disk-backed workspace is implemented and tested locally. A browser/OPFS port exists in source but is not linked from the shared website; its >1 GB browser validation was stopped before completion. The public GitHub Pages demo still uses the original browser-only 1 MB / 5,000-row limit. Cloudflare R2 is **not activated or connected**, and the large-file workspace is **not publicly deployed**.
 
 The owner stopped Cloudflare setup on September 18, 2026 and chose to keep the existing 1 MB public website. The Cloudflare API confirmed R2 was never enabled, and its unfinished checkout was closed. No paid plan or R2 subscription was enabled. Oracle is no longer being pursued. Do not resume cloud hosting without a new instruction.
 

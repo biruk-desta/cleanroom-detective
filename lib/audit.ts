@@ -1,3 +1,12 @@
+import {
+  type AuditOptions,
+  optionsFor,
+  validateOptions,
+  outlierMultiplier,
+  customFindings,
+  findingMeta,
+  findingPriority,
+} from './audit-options.ts';
 export type Row = { id: number; cells: string[] };
 export type Dataset = {
   name: string;
@@ -11,7 +20,10 @@ export type Check =
   | 'dates'
   | 'categories'
   | 'units'
-  | 'outliers';
+  | 'outliers'
+  | 'required'
+  | 'email'
+  | 'range';
 export const CHECKS: Check[] = [
   'duplicates',
   'arithmetic',
@@ -19,6 +31,9 @@ export const CHECKS: Check[] = [
   'categories',
   'units',
   'outliers',
+  'required',
+  'email',
+  'range',
 ];
 export const CHECK_NAMES: Record<Check, string> = {
   duplicates: 'Duplicate records',
@@ -27,8 +42,12 @@ export const CHECK_NAMES: Record<Check, string> = {
   categories: 'Category consistency',
   units: 'Explicit units',
   outliers: 'Unusual values',
+  required: 'Required values',
+  email: 'Email structure',
+  range: 'Numeric limits',
 };
 export type Rules = {
+  audit?: AuditOptions;
   idColumn: string;
   uniqueIds: boolean;
   quantityColumn: string;
@@ -64,9 +83,13 @@ export type Finding = {
   detail: string;
   evidence: string[];
   kind: 'repair' | 'issue' | 'review';
+  severity?: 'low' | 'medium' | 'high' | 'critical';
+  confidence?: string;
+  priority?: number;
   patch?: Patch;
 };
 export type Decision = {
+  batchId?: string;
   id: string;
   finding: Finding;
   action: 'apply' | 'keep';
@@ -278,6 +301,7 @@ export function validateRules(raw: unknown, headers: string[]): Rules {
     (!r.valueColumn || !r.unitColumn || r.valueColumn === r.unitColumn)
   )
     throw new Error('Map distinct value and unit columns.');
+  validateOptions(r, headers);
   return r;
 }
 export function isMissing(value: string, r: Rules) {
@@ -380,6 +404,9 @@ export function availableChecks(r: Rules): Check[] {
           r.categories.length > 0,
         units: r.convertUnits && !!r.valueColumn && !!r.unitColumn,
         outliers: r.checkOutliers && !!r.outlierColumn,
+        required: optionsFor(r).required.length > 0,
+        email: !!optionsFor(r).emailColumn,
+        range: !!optionsFor(r).rangeColumn,
       })[k],
   );
 }
@@ -388,6 +415,12 @@ export function inspectCheck(data: Dataset, r: Rules, check: Check): Finding[] {
   validateRules(r, data.headers);
   if (!CHECKS.includes(check)) throw new Error('Unknown investigation check.');
   if (!availableChecks(r).includes(check)) return [];
+  if (check === 'required' || check === 'email' || check === 'range')
+    return customFindings(data, r, check).map((f) => ({
+      ...f,
+      ...findingMeta(f),
+      priority: findingPriority(f),
+    }));
   const out: Finding[] = [];
   const idx = (name: string) => data.headers.indexOf(name);
   const add = (
@@ -631,8 +664,8 @@ export function inspectCheck(data: Dataset, r: Rules, check: Check): Finding[] {
       const q1 = quantile(values, 0.25),
         q3 = quantile(values, 0.75),
         iqr = q3 - q1,
-        low = q1 - 1.5 * iqr,
-        high = q3 + 1.5 * iqr;
+        low = q1 - outlierMultiplier(r) * iqr,
+        high = q3 + outlierMultiplier(r) * iqr;
       for (const row of data.rows) {
         const n = isMissing(row.cells[col], r)
           ? null
@@ -645,7 +678,7 @@ export function inspectCheck(data: Dataset, r: Rules, check: Check): Finding[] {
             'Keep the value unless source evidence supports a correction.',
             [
               `Observed: ${n}; reference cohort: ${values.length} numeric records.`,
-              `Q1 ${q1.toFixed(2)}, Q3 ${q3.toFixed(2)}; 1.5 × IQR interval: ${low.toFixed(2)} to ${high.toFixed(2)}.`,
+              `Q1 ${q1.toFixed(2)}, Q3 ${q3.toFixed(2)}; ${outlierMultiplier(r)} × IQR interval: ${low.toFixed(2)} to ${high.toFixed(2)}.`,
               'A statistical outlier may be a legitimate large order.',
             ],
             'review',
@@ -653,7 +686,11 @@ export function inspectCheck(data: Dataset, r: Rules, check: Check): Finding[] {
       }
     }
   }
-  return out;
+  return out.map((f) => ({
+    ...f,
+    ...findingMeta(f),
+    priority: findingPriority(f),
+  }));
 }
 
 export function applyPatch(data: Dataset, patch: Patch): Dataset {

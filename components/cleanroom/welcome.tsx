@@ -21,10 +21,12 @@ export function Welcome({
   onChoose,
   onExample,
   onDrop,
+  largeFiles = false,
 }: {
   onChoose: () => void;
   onExample: () => void;
   onDrop: (file: File) => void;
+  largeFiles?: boolean;
 }) {
   const [dragging, setDragging] = useState(false);
   return (
@@ -62,19 +64,23 @@ export function Welcome({
           </div>
           <h2>Start with your file</h2>
           <p>
-            Drop a CSV here, or choose one
+            Drop a spreadsheet here, or choose one
             <br />
             from your computer.
           </p>
           <Button className="primary-large" onClick={onChoose}>
-            <Upload size={18} /> Choose a CSV file
+            <Upload size={18} /> Choose a file
           </Button>
-          <small>CSV files up to 1 MB · 5,000 rows</small>
+          <small>
+            {largeFiles
+              ? 'Large CSVs supported in desktop Chrome or Edge · Files stay on your device'
+              : 'CSV files up to 1 MB · 5,000 rows'}
+          </small>
           <div className="csv-tip">
             <FileSpreadsheet size={17} />
             <span>
-              Using Excel or Google Sheets? Save or download your spreadsheet as
-              a <b>.csv</b> file.
+              CSV, Excel, and flat JSON tables supported. For large files, use{' '}
+              <b>.csv</b>.
             </span>
           </div>
         </section>

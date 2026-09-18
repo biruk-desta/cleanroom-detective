@@ -46,6 +46,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
+import { findingMeta, similarFindings } from '@/lib/audit-options';
+import { printReport, summaryReport } from '@/lib/report';
 import { CheckSettings } from './check-settings';
 import {
   SAMPLE_RULES,
@@ -56,6 +58,7 @@ import {
   type Finding,
 } from '@/lib/audit';
 import type { LargeJob, LargeFinding, LargeSession } from '@/lib/large-types';
+import type { LargeBackend } from '@/lib/browser-backend';
 
 const formatSize = (bytes: number) =>
   bytes >= 1024 ** 3
@@ -63,7 +66,7 @@ const formatSize = (bytes: number) =>
     : `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 const waiting = (j: LargeJob | null) =>
   j?.state === 'working' || j?.state === 'queued';
-async function request<T>(
+async function serverRequest<T>(
   path: string,
   method = 'GET',
   body?: unknown,
@@ -96,8 +99,23 @@ const plainTitle = (f: Finding) =>
     categories: f.patch ? 'Make this label consistent' : 'Check this label',
     units: f.patch ? 'Use the same unit' : 'Check this measurement',
     outliers: 'An unusual value to double-check',
+    required: 'A required value is missing',
+    email: 'Check this email address',
+    range: 'Check this numeric value',
   })[f.check];
-export function LargeWorkspace() {
+export function LargeWorkspace({
+  backend,
+  initialFile,
+  onBack,
+}: {
+  backend?: LargeBackend;
+  initialFile?: File | null;
+  onBack?: () => void;
+} = {}) {
+  const request = backend?.request ?? serverRequest;
+  const local = backend?.mode === 'browser';
+  const [exporting, setExporting] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [session, setSession] = useState<LargeSession | null>(null),
     [loaded, setLoaded] = useState(false);
   const [username, setUsername] = useState(''),
@@ -114,7 +132,7 @@ export function LargeWorkspace() {
   const [findings, setFindings] = useState<LargeFinding[]>([]),
     [selected, setSelected] = useState<LargeFinding | null>(null);
   const [filter, setFilter] = useState('pending'),
-    [cursor, setCursor] = useState({ row: 0, id: '' });
+    [cursor, setCursor] = useState({ row: 0, id: '', priority: 1000 });
   const [rows, setRows] = useState<(Row & { changed: boolean })[]>([]),
     [rowCursor, setRowCursor] = useState(0);
   const [relatedRow, setRelatedRow] = useState<number | null>(null);
@@ -137,44 +155,59 @@ export function LargeWorkspace() {
   const currentUpload = useRef<LargeJob | null>(null);
   const [resumeId, setResumeId] = useState<string | null>(null);
   const summary = job?.summary;
+  const similar = selected
+    ? (similarFindings(
+        findings.slice(0, 30).filter((f) => !f.reviewed),
+        selected,
+      ) as LargeFinding[])
+    : [];
   const busy = waiting(job);
   const refreshJobs = useCallback(async () => {
     setJobs(await request<LargeJob[]>('jobs'));
-  }, []);
+  }, [request]);
   useEffect(() => {
     request<LargeSession>('session')
       .then((s) => {
         setSession(s);
         void refreshJobs();
       })
-      .catch(() => {})
+      .catch((e) => {
+        if (local) setError(e.message);
+      })
       .finally(() => setLoaded(true));
     return () => uploadAbort.current?.abort();
-  }, [refreshJobs]);
+  }, [refreshJobs, request, local]);
   useEffect(() => {
     if (!job || !waiting(job)) return;
+    let alive = true;
     const id = setInterval(() => {
       request<LargeJob>(`jobs/${job.id}`)
         .then((next) => {
+          if (!alive) return;
           setJob(next);
           if (!waiting(next)) {
-            setCursor({ row: 0, id: '' });
+            setCursor({ row: 0, id: '', priority: 1000 });
             setSelected(null);
             void refreshJobs();
             if (next.error) setError(next.error);
           }
         })
-        .catch((e) => setError(String(e.message)));
+        .catch((e) => {
+          if (alive) setError(String(e.message));
+        });
     }, 1200);
-    return () => clearInterval(id);
-  }, [job, refreshJobs]);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [job, refreshJobs, request]);
   useEffect(() => {
     if (!job || job.state !== 'complete') {
       return;
     }
     let alive = true;
     request<LargeFinding[]>(
-      `jobs/${job.id}/findings?filter=${filter}&afterRow=${cursor.row}&afterId=${encodeURIComponent(cursor.id)}`,
+      `jobs/${job.id}/findings?filter=${filter}&afterRow=${cursor.row}&afterId=${encodeURIComponent(cursor.id)}&afterPriority=${cursor.priority}`,
     )
       .then((items) => {
         if (!alive) return;
@@ -190,28 +223,32 @@ export function LargeWorkspace() {
     return () => {
       alive = false;
     };
-  }, [job, filter, cursor]);
+  }, [job, filter, cursor, request]);
   useEffect(() => {
     if (!job || !['ready', 'complete'].includes(job.state)) return;
     let alive = true;
-    if (tab === 'data')
+    if (tab === 'data' || job.state === 'ready')
       request<(Row & { changed: boolean })[]>(
         `jobs/${job.id}/rows?after=${rowCursor}${relatedRow === null ? '' : `&relatedRow=${relatedRow}`}`,
       )
         .then((v) => {
           if (alive) setRows(v);
         })
-        .catch((e) => setError(String(e.message)));
+        .catch((e) => {
+          if (alive) setError(String(e.message));
+        });
     if (tab === 'changes')
       request<typeof decisions>(`jobs/${job.id}/decisions`)
         .then((v) => {
           if (alive) setDecisions(v);
         })
-        .catch((e) => setError(String(e.message)));
+        .catch((e) => {
+          if (alive) setError(String(e.message));
+        });
     return () => {
       alive = false;
     };
-  }, [job, tab, rowCursor, relatedRow]);
+  }, [job, tab, rowCursor, relatedRow, request]);
   async function signIn(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
     setError('');
@@ -228,7 +265,7 @@ export function LargeWorkspace() {
     }
   }
   async function task(action: string, body?: unknown) {
-    if (!job || (busy && action !== 'cancel') || uploading) return;
+    if (!job || (busy && action !== 'cancel') || uploading || exporting) return;
     try {
       setError('');
       setNotice('');
@@ -243,7 +280,7 @@ export function LargeWorkspace() {
   }
   function openJob(next: LargeJob) {
     setJob(next);
-    setCursor({ row: 0, id: '' });
+    setCursor({ row: 0, id: '', priority: 1000 });
     setRowCursor(0);
     setRelatedRow(null);
     setFilter('pending');
@@ -269,7 +306,7 @@ export function LargeWorkspace() {
       let next: LargeJob;
       if (resumeId) {
         next = await request<LargeJob>(`jobs/${resumeId}`);
-        if (next.name !== file.name || next.size !== file.size)
+        if (next.name !== file.name.slice(0, 120) || next.size !== file.size)
           throw new Error(
             'Select the same file name and size to resume this upload.',
           );
@@ -304,22 +341,32 @@ export function LargeWorkspace() {
         if (abort.signal.aborted)
           throw new DOMException('Paused', 'AbortError');
         const end = Math.min(file.size, next.offset + session.chunkBytes);
-        const res = await fetch(`/api/large/jobs/${next.id}/chunk`, {
-          method: 'PUT',
-          credentials: 'same-origin',
-          headers: {
-            'Content-Type': 'application/octet-stream',
-            'X-Cleanroom': '1',
-            'Upload-Offset': String(next.offset),
-          },
-          body: file.slice(next.offset, end),
-          signal: abort.signal,
-        });
-        const result = (await res.json()) as { error?: string; offset: number };
-        if (!res.ok)
-          throw new Error(
-            result.error || 'Upload paused. Resume to retry this chunk.',
+        let result: { error?: string; offset: number };
+        if (backend)
+          result = await backend.writeChunk(
+            next.id,
+            next.offset,
+            file.slice(next.offset, end),
+            abort.signal,
           );
+        else {
+          const res = await fetch(`/api/large/jobs/${next.id}/chunk`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'X-Cleanroom': '1',
+              'Upload-Offset': String(next.offset),
+            },
+            body: file.slice(next.offset, end),
+            signal: abort.signal,
+          });
+          result = (await res.json()) as { error?: string; offset: number };
+          if (!res.ok)
+            throw new Error(
+              result.error || 'Upload paused. Resume to retry this chunk.',
+            );
+        }
         next = { ...next, offset: result.offset };
         currentUpload.current = next;
         setUploadOffset(next.offset);
@@ -362,6 +409,39 @@ export function LargeWorkspace() {
   }
   const downloadHref = (kind: string) =>
     `/api/large/jobs/${job?.id}/download?kind=${kind}`;
+  async function downloadFile(kind: string) {
+    if (!job || exporting) return;
+    if (!backend) {
+      window.location.assign(downloadHref(kind));
+      return;
+    }
+    setError('');
+    const name =
+      kind === 'original'
+        ? job.name
+        : kind === 'updated'
+          ? job.name.replace(/\.csv$/i, '') + '-updated.csv'
+          : kind === 'report'
+            ? 'review-report.html'
+            : kind === 'unresolved'
+              ? 'unresolved-issues.csv'
+              : 'changes.csv';
+    try {
+      const pending = backend.download(job.id, kind, name);
+      setExporting(true);
+      setNotice('Saving your complete file. Keep this tab open…');
+      await pending;
+      setNotice('Your file was saved.');
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === 'AbortError'))
+        setError(
+          e instanceof Error ? e.message : 'The download could not finish.',
+        );
+      setNotice('');
+    } finally {
+      setExporting(false);
+    }
+  }
   function choose(f: LargeFinding) {
     setSelected(f);
     setNote('');
@@ -379,7 +459,16 @@ export function LargeWorkspace() {
             Cleanroom Detective<small>Room for your larger spreadsheets</small>
           </span>
         </div>
-        {session && (
+        {local && onBack && (
+          <Button
+            variant="ghost"
+            disabled={uploading || busy || exporting}
+            onClick={onBack}
+          >
+            <ArrowLeft /> Small-file demo
+          </Button>
+        )}
+        {session && !local && (
           <Button
             variant="ghost"
             disabled={uploading || busy}
@@ -413,6 +502,17 @@ export function LargeWorkspace() {
           <LoaderCircle className="animate-spin" />
           Opening your workspace…
         </div>
+      ) : !session && local ? (
+        <section className="large-login">
+          <h1>Let’s open this in a supported browser.</h1>
+          <p>{error || 'Browser storage is not available.'}</p>
+          <Button onClick={() => window.location.reload()}>Try again</Button>
+          {onBack && (
+            <Button variant="ghost" onClick={onBack}>
+              Back to the example
+            </Button>
+          )}
+        </section>
       ) : !session ? (
         <section className="large-login">
           <span className="soft-icon">
@@ -482,37 +582,49 @@ export function LargeWorkspace() {
             <>
               <section className="large-intro">
                 <div>
-                  <p className="eyebrow">Hello, {session.username}</p>
+                  <p className="eyebrow">
+                    {local
+                      ? 'Private to this browser'
+                      : `Hello, ${session.username}`}
+                  </p>
                   <h1>Your files, with room to grow.</h1>
                   <p>
-                    Upload a CSV up to {formatSize(session.maxUploadBytes)}.
-                    We’ll check it in the background while you keep this page
-                    open or come back later.
+                    {local ? 'Open' : 'Upload'} a CSV up to{' '}
+                    {formatSize(session.maxUploadBytes)}.
+                    {local
+                      ? ' Your file stays on this device. Keep this tab open while it works.'
+                      : ' We’ll check it in the background. You can come back later.'}
                   </p>
                 </div>
                 <Button
                   className="primary-large"
                   onClick={() => {
                     setResumeId(null);
-                    input.current?.click();
+                    if (initialFile) void upload(initialFile);
+                    else input.current?.click();
                   }}
                 >
-                  <Upload /> Choose a CSV
+                  <Upload />{' '}
+                  {initialFile ? `Open ${initialFile.name}` : 'Choose a CSV'}
                 </Button>
               </section>
               <div className="server-privacy">
                 <ShieldCheck size={20} />
                 <p>
-                  Large files are uploaded to this private workspace. Your
-                  original stays unchanged. Files and results are automatically
-                  deleted {session.retentionHours} hours after upload begins.
+                  {local
+                    ? 'Files are processed on your device and never uploaded. Your original stays unchanged. Saved work belongs to this browser; clearing site data removes it. Files older than 24 hours are removed when you next open this workspace.'
+                    : `Large files are uploaded to this private workspace. Your original stays unchanged. Files and results are deleted ${session.retentionHours} hours after upload begins.`}
                 </p>
               </div>
               <section className="data-card">
                 <div className="panelhead">
                   <div>
                     <h2>Your files</h2>
-                    <p>Only files belonging to this account appear here.</p>
+                    <p>
+                      {local
+                        ? 'Files saved in this browser appear here.'
+                        : 'Only files belonging to this account appear here.'}
+                    </p>
                   </div>
                   <Button variant="ghost" onClick={() => void refreshJobs()}>
                     <RotateCcw size={16} /> Refresh
@@ -532,7 +644,9 @@ export function LargeWorkspace() {
                           </small>
                         </span>
                         <span className="job-expiry">
-                          Expires {new Date(item.expires).toLocaleString()}
+                          {local
+                            ? 'Saved on this device'
+                            : `Expires ${new Date(item.expires).toLocaleString()}`}
                         </span>
                         <ArrowRight size={18} />
                       </button>
@@ -648,8 +762,9 @@ export function LargeWorkspace() {
                     />
                   )}
                   <p className="setting-help">
-                    You can leave and return to this workspace. Your original
-                    remains unchanged.
+                    {local
+                      ? 'Keep this tab open until the task finishes. Your original remains unchanged.'
+                      : 'You can leave and return to this workspace. Your original remains unchanged.'}
                   </p>
                   <Button variant="ghost" onClick={() => void task('cancel')}>
                     Stop this task
@@ -701,7 +816,7 @@ export function LargeWorkspace() {
                           setRulesOpen(true);
                         }}
                       >
-                        <SlidersHorizontal /> Adjust checks
+                        <SlidersHorizontal /> Set goal & adjust checks
                       </Button>
                     </div>
                   </div>
@@ -713,6 +828,27 @@ export function LargeWorkspace() {
                       review, and your original file remains available.
                     </p>
                     <p>Processing runs without a paid AI connection.</p>
+                    <h3>A peek at your file</h3>
+                    <div className="dataset-scroll">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            {summary.headers.slice(0, 3).map((h) => (
+                              <TableHead key={h}>{h}</TableHead>
+                            ))}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {rows.slice(0, 3).map((r) => (
+                            <TableRow key={r.id}>
+                              {r.cells.slice(0, 3).map((c, i) => (
+                                <TableCell key={i}>{c || '—'}</TableCell>
+                              ))}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
                   </div>
                 </section>
               ) : (
@@ -733,12 +869,8 @@ export function LargeWorkspace() {
                         </p>
                       </div>
                       <Button
-                        render={
-                          <a
-                            href={downloadHref('updated')}
-                            aria-label="Download updated CSV"
-                          />
-                        }
+                        disabled={exporting}
+                        onClick={() => void downloadFile('updated')}
                         className="download-top"
                       >
                         <Download /> Download updated CSV
@@ -769,7 +901,7 @@ export function LargeWorkspace() {
                             setRulesOpen(true);
                           }}
                         >
-                          <SlidersHorizontal /> Adjust checks
+                          <SlidersHorizontal /> Set goal & adjust checks
                         </Button>
                         <Button
                           variant="ghost"
@@ -792,12 +924,8 @@ export function LargeWorkspace() {
                               report.
                             </p>
                             <Button
-                              render={
-                                <a
-                                  href={downloadHref('updated')}
-                                  aria-label="Download updated CSV"
-                                />
-                              }
+                              disabled={exporting}
+                              onClick={() => void downloadFile('updated')}
                               className="primary-large"
                             >
                               <Download /> Download updated CSV
@@ -807,7 +935,7 @@ export function LargeWorkspace() {
                                 variant="ghost"
                                 onClick={() => {
                                   setFilter('all');
-                                  setCursor({ row: 0, id: '' });
+                                  setCursor({ row: 0, id: '', priority: 1000 });
                                 }}
                               >
                                 View current findings
@@ -832,7 +960,11 @@ export function LargeWorkspace() {
                                     value={filter}
                                     onChange={(e) => {
                                       setFilter(e.target.value);
-                                      setCursor({ row: 0, id: '' });
+                                      setCursor({
+                                        row: 0,
+                                        id: '',
+                                        priority: 1000,
+                                      });
                                     }}
                                   >
                                     <option value="pending">To review</option>
@@ -893,7 +1025,13 @@ export function LargeWorkspace() {
                                   variant="ghost"
                                   size="sm"
                                   disabled={!cursor.row}
-                                  onClick={() => setCursor({ row: 0, id: '' })}
+                                  onClick={() =>
+                                    setCursor({
+                                      row: 0,
+                                      id: '',
+                                      priority: 1000,
+                                    })
+                                  }
                                 >
                                   First page
                                 </Button>
@@ -903,7 +1041,11 @@ export function LargeWorkspace() {
                                   disabled={findings.length <= 30}
                                   onClick={() => {
                                     const last = findings[29];
-                                    setCursor({ row: last.rowId, id: last.id });
+                                    setCursor({
+                                      row: last.rowId,
+                                      id: last.id,
+                                      priority: last.priority,
+                                    });
                                   }}
                                 >
                                   Next 30 <ArrowRight size={14} />
@@ -913,6 +1055,10 @@ export function LargeWorkspace() {
                             <section className="suggestion-detail">
                               {selected ? (
                                 <>
+                                  <p className="finding-priority">
+                                    {findingMeta(selected).severity} priority ·{' '}
+                                    {findingMeta(selected).confidence}
+                                  </p>
                                   <div className="detail-top">
                                     <span
                                       className={`kind-label ${selected.patch ? 'fix' : 'look'}`}
@@ -1083,7 +1229,7 @@ export function LargeWorkspace() {
                                           Keep as is
                                         </Button>
                                       </div>
-                                      {!selected.patch && (
+                                      {!selected.patch?.deleteRow && (
                                         <>
                                           <Button
                                             variant="ghost"
@@ -1132,6 +1278,15 @@ export function LargeWorkspace() {
                                             </div>
                                           )}
                                         </>
+                                      )}
+                                      {similar.length > 1 && (
+                                        <Button
+                                          variant="outline"
+                                          onClick={() => setBulkOpen(true)}
+                                        >
+                                          Preview {similar.length} similar fixes
+                                          on this page
+                                        </Button>
                                       )}
                                       <p className="undo-hint">
                                         <RotateCcw size={14} />
@@ -1238,12 +1393,8 @@ export function LargeWorkspace() {
                             </div>
                             <Button
                               variant="outline"
-                              render={
-                                <a
-                                  href={downloadHref('changes')}
-                                  aria-label="Download all decisions"
-                                />
-                              }
+                              disabled={exporting}
+                              onClick={() => void downloadFile('changes')}
                             >
                               <Download /> All decisions
                             </Button>
@@ -1260,6 +1411,19 @@ export function LargeWorkspace() {
                                     {new Date(d.at).toLocaleString()}
                                   </small>
                                   <h3>{plainTitle(d.finding)}</h3>
+                                  {d.action === 'apply' && (
+                                    <p>
+                                      {d.finding.patch?.deleteRow
+                                        ? 'Removed duplicate row'
+                                        : d.finding.patch?.changes
+                                            .map(
+                                              (c) =>
+                                                `${summary.headers[c.column]}: ${c.before || '(empty)'} → ${c.after}`,
+                                            )
+                                            .join('; ')}
+                                    </p>
+                                  )}
+                                  <small>Rule: {d.finding.check}</small>
                                   <p>{d.note || 'You approved this change.'}</p>
                                 </div>
                                 <span className="quiet-tag">
@@ -1295,6 +1459,30 @@ export function LargeWorkspace() {
                               </p>
                             </div>
                           </div>
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              try {
+                                printReport(
+                                  summaryReport(
+                                    summary,
+                                    findings.slice(0, 30),
+                                    decisions,
+                                  ),
+                                );
+                              } catch (e) {
+                                setError((e as Error).message);
+                              }
+                            }}
+                          >
+                            <Download /> Save summary as PDF
+                          </Button>
+                          <p className="setting-help">
+                            Choose “Save as PDF” in the print dialog. The
+                            summary includes counts, rules, and up to 30
+                            currently loaded findings and decisions. Download
+                            the reports below for complete records.
+                          </p>
                           <div className="large-downloads">
                             {[
                               [
@@ -1313,6 +1501,11 @@ export function LargeWorkspace() {
                                 'Before and after values and your notes',
                               ],
                               [
+                                'unresolved',
+                                'Unresolved issues',
+                                'All current flags, including values kept unchanged',
+                              ],
+                              [
                                 'report',
                                 'Review report',
                                 'All current findings and decisions',
@@ -1321,12 +1514,8 @@ export function LargeWorkspace() {
                               <Button
                                 key={kind}
                                 variant="outline"
-                                render={
-                                  <a
-                                    href={downloadHref(kind)}
-                                    aria-label={title}
-                                  />
-                                }
+                                disabled={exporting}
+                                onClick={() => void downloadFile(kind)}
                               >
                                 <Download />
                                 <span>
@@ -1356,8 +1545,52 @@ export function LargeWorkspace() {
       )}
       <footer className="app-footer">
         <span>Small fixes. Clear explanations. Your call.</span>
-        <span>Private uploads · Background checks · Reversible changes</span>
+        <span>
+          {local
+            ? 'On your device · Background checks · Reversible changes'
+            : 'Private uploads · Background checks · Reversible changes'}
+        </span>
       </footer>
+      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+        <DialogContent className="settings-dialog">
+          <DialogHeader>
+            <DialogTitle>Review these {similar.length} changes</DialogTitle>
+            <DialogDescription>
+              Only these proposed corrections on the current page will be
+              applied. Each value comes from its own evidence. Undo restores the
+              whole batch.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="bulk-preview">
+            {similar.map((f) => (
+              <p key={f.id}>
+                <b>Row {f.rowId}</b> ·{' '}
+                {f.patch?.changes
+                  .map(
+                    (c) =>
+                      `${summary?.headers[c.column]}: ${c.before || '(empty)'} → ${c.after}`,
+                  )
+                  .join('; ')}
+              </p>
+            ))}
+          </div>
+          <Button
+            disabled={busy || exporting || !similar.length}
+            onClick={() => {
+              void task('bulk', {
+                items: similar.map((f) => ({
+                  id: f.id,
+                  fingerprint: f.fingerprint,
+                })),
+                note,
+              });
+              setBulkOpen(false);
+            }}
+          >
+            Approve these {similar.length} changes
+          </Button>
+        </DialogContent>
+      </Dialog>
       <CheckSettings
         open={rulesOpen}
         onOpenChange={setRulesOpen}

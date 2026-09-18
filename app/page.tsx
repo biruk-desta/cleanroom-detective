@@ -74,7 +74,14 @@ import {
   type KeyEntry,
   type Check,
 } from '@/lib/audit';
-import { reportHTML } from '@/lib/report';
+import {
+  findingMeta,
+  findingPriority,
+  similarFindings,
+  unresolvedCSV,
+} from '@/lib/audit-options';
+import { convertFile, type ConvertedFile } from '@/lib/import-file';
+import { reportHTML, printReport } from '@/lib/report';
 import { STATIC_DEMO, publicAsset } from '@/lib/runtime';
 import { Welcome } from '@/components/cleanroom/welcome';
 import { CheckSettings } from '@/components/cleanroom/check-settings';
@@ -93,6 +100,9 @@ const CHECK_LABELS: Record<Check, string> = {
   categories: 'Names & categories',
   units: 'Grams & kilograms',
   outliers: 'Unusual numbers',
+  required: 'Required fields',
+  email: 'Email structure',
+  range: 'Numeric limits',
 };
 const friendlyTitle = (f: Finding) =>
   ({
@@ -110,6 +120,9 @@ const friendlyTitle = (f: Finding) =>
       : 'Check this category name',
     units: f.patch ? 'Use the same unit' : 'Check this measurement',
     outliers: 'An unusual value to double-check',
+    required: 'Fill a required field',
+    email: 'Check this email address',
+    range: 'Check this numeric value',
   })[f.check];
 const label = (f: Finding) => (f.patch ? 'Suggested fix' : 'Take a look');
 const err = (e: unknown) =>
@@ -122,7 +135,17 @@ function download(name: string, body: string, type = 'text/csv') {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-export default function Home() {
+export default function Home({
+  onLargeFile,
+  onOpenLarge,
+}: { onLargeFile?: (file: File) => void; onOpenLarge?: () => void } = {}) {
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [conversion, setConversion] = useState<{
+    file: File;
+    result: ConvertedFile;
+  } | null>(null);
+  const [conversionWarnings, setConversionWarnings] = useState<string[]>([]);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [hasFile, setHasFile] = useState(false);
   const [original, setOriginal] = useState(INITIAL),
     [rules, setRules] = useState<Rules>(SAMPLE_RULES),
@@ -167,7 +190,9 @@ export default function Home() {
     decisions.forEach((d) => {
       if (!m.has(d.finding.id)) m.set(d.finding.id, d.finding);
     });
-    return [...m.values()].sort((a, b) => a.rowId - b.rowId);
+    return [...m.values()].sort(
+      (a, b) => findingPriority(b) - findingPriority(a) || a.rowId - b.rowId,
+    );
   }, [findings, decisions]);
   const pending = combined.filter(
     (f) => !decisions.some((d) => d.finding.id === f.id),
@@ -212,6 +237,8 @@ export default function Home() {
   ) {
     try {
       const next = parseCSV(text, name);
+      setSourceFile(null);
+      setConversionWarnings([]);
       setOriginal(next);
       setHasFile(true);
       const r = sample ? SAMPLE_RULES : inferRules(next.headers);
@@ -311,10 +338,15 @@ export default function Home() {
           setFrozen(fs);
           baseline.current = true;
         }
-        setSelectedId(fs[0]?.id ?? '');
+        setSelectedId(
+          [...fs].sort(
+            (a, b) =>
+              findingPriority(b) - findingPriority(a) || a.rowId - b.rowId,
+          )[0]?.id ?? '',
+        );
         setRan(true);
         setSummary(
-          'Rules audit completed. Every configured check ran; no language model was used.',
+          `Checked ${data.rows.length.toLocaleString()} rows using ${activeChecks.length} confirmed checks. Found ${fs.filter((f) => f.patch).length} suggested fixes and ${fs.filter((f) => !f.patch).length} items needing judgment. Your original file is unchanged.`,
         );
         setStatus('Rules audit complete');
       } else {
@@ -358,7 +390,12 @@ export default function Home() {
               baseline.current = true;
             }
             setSummary(e.summary);
-            setSelectedId(e.findings[0]?.id ?? '');
+            setSelectedId(
+              [...(e.findings as Finding[])].sort(
+                (a, b) =>
+                  findingPriority(b) - findingPriority(a) || a.rowId - b.rowId,
+              )[0]?.id ?? '',
+            );
             setRan(true);
             setStatus('AI investigation complete');
             done = true;
@@ -471,9 +508,39 @@ export default function Home() {
       setError(err(e));
     }
   }
+  const similar = selected ? similarFindings(pending, selected) : [];
+  function applySimilar() {
+    try {
+      if (!similar.length) return;
+      let next = data;
+      for (const f of similar) next = applyPatch(next, f.patch!);
+      const batchId = crypto.randomUUID();
+      setDecisions((d) => [
+        ...d,
+        ...similar.map((f) => ({
+          id: crypto.randomUUID(),
+          finding: f,
+          action: 'apply' as const,
+          note: note.trim() || 'Approved after previewing this batch.',
+          at: new Date().toISOString(),
+          batchId,
+        })),
+      ]);
+      setFindings(allFindings(next, rules));
+      setBulkOpen(false);
+      setNotice(
+        `${similar.length} approved changes applied. Undo reverses this whole batch.`,
+      );
+    } catch (e) {
+      setError(err(e));
+    }
+  }
   function undo() {
     try {
-      const next = decisions.slice(0, -1);
+      const last = decisions.at(-1);
+      const next = last?.batchId
+        ? decisions.filter((d) => d.batchId !== last.batchId)
+        : decisions.slice(0, -1);
       setFindings(allFindings(materialize(original, next), rules));
       setSelectedId(decisions.at(-1)?.finding.id ?? '');
       setFilter('pending');
@@ -545,18 +612,46 @@ export default function Home() {
   async function loadFile(file?: File) {
     if (!file) return;
     try {
-      if (!file.name.toLowerCase().endsWith('.csv'))
-        throw new Error(
-          'Please save your spreadsheet as a CSV file, then choose it here.',
-        );
-      if (file.size > 1_000_000)
-        throw new Error(
-          'This file is a little too large. Choose a CSV under 1 MB.',
-        );
-      reset(await file.text(), file.name, false);
+      setError('');
+      if (
+        file.name.toLowerCase().endsWith('.csv') &&
+        file.size > 1_000_000 &&
+        onLargeFile
+      ) {
+        onLargeFile(file);
+        return;
+      }
+      if (file.name.toLowerCase().endsWith('.csv') && file.size > 1_000_000)
+        throw new Error('Choose a CSV under 1 MB in this workspace.');
+      const result = await convertFile(file);
+      if (result.sheets.length > 1) {
+        setConversion({ file, result });
+        return;
+      }
+      acceptConversion(file, result, 0);
     } catch (e) {
+      if (
+        onLargeFile &&
+        file.name.toLowerCase().endsWith('.csv') &&
+        err(e).includes('5,000')
+      ) {
+        onLargeFile(file);
+        return;
+      }
       setError(err(e));
     }
+  }
+  function acceptConversion(file: File, result: ConvertedFile, index: number) {
+    const csv = result.sheets[index].csv;
+    if (!csv)
+      throw new Error(
+        'This sheet exceeds the conversion limits. Export it as CSV for the large-file workspace.',
+      );
+    parseCSV(csv); // Validate before reset so errors do not get swallowed.
+    reset(csv, file.name.replace(/\.(xlsx|xls|json)$/i, '.csv'), false);
+    setSourceFile(file);
+    setConversionWarnings(result.warnings);
+    setConversion(null);
   }
   function chooseFinding(id: string) {
     setSelectedId(id);
@@ -586,6 +681,11 @@ export default function Home() {
             Cleanroom Detective<small>A clearer view of your spreadsheet</small>
           </span>
         </div>
+        {onOpenLarge && (
+          <Button variant="ghost" onClick={onOpenLarge}>
+            <FileSpreadsheet size={18} /> Large-file workspace
+          </Button>
+        )}
         <Button
           variant="ghost"
           className="help-button"
@@ -609,7 +709,7 @@ export default function Home() {
       <input
         ref={uploadRef}
         type="file"
-        accept=".csv,text/csv"
+        accept=".csv,.xlsx,.xls,.json,text/csv,application/json"
         hidden
         onChange={(e) => {
           void loadFile(e.target.files?.[0]);
@@ -632,6 +732,7 @@ export default function Home() {
       )}
       {!hasFile ? (
         <Welcome
+          largeFiles={!!onOpenLarge}
           onChoose={() => uploadRef.current?.click()}
           onExample={() => reset()}
           onDrop={(f) => {
@@ -703,6 +804,13 @@ export default function Home() {
                   We’ll look for possible problems and explain what we find.
                   You’ll choose which changes to keep.
                 </p>
+                {!!conversionWarnings.length && (
+                  <div className="conversion-note">
+                    {conversionWarnings.map((w) => (
+                      <p key={w}>{w}</p>
+                    ))}
+                  </div>
+                )}
                 <div className="check-chips">
                   {activeChecks.map((c) => (
                     <span key={c}>
@@ -739,7 +847,7 @@ export default function Home() {
                       disabled={!!answerKey.length}
                       onClick={openChecks}
                     >
-                      <SlidersHorizontal size={17} /> Adjust checks
+                      <SlidersHorizontal size={17} /> Set goal & adjust checks
                     </Button>
                   )}
                 </div>
@@ -765,7 +873,16 @@ export default function Home() {
                   <TableHeader>
                     <TableRow>
                       {data.headers.slice(0, 3).map((h) => (
-                        <TableHead key={h}>{h}</TableHead>
+                        <TableHead key={h}>
+                          {h}
+                          <small>
+                            {profile(data, rules).columns.find(
+                              (c) => c.name === h,
+                            )?.numeric === data.rows.length
+                              ? 'Numeric'
+                              : 'Text / mixed'}
+                          </small>
+                        </TableHead>
                       ))}
                     </TableRow>
                   </TableHeader>
@@ -1131,6 +1248,10 @@ export default function Home() {
                                 </div>
                               </div>
                             )}
+                            <p className="finding-priority">
+                              {findingMeta(selected).severity} priority ·{' '}
+                              {findingMeta(selected).confidence}
+                            </p>
                             <Accordion
                               className="evidence-accordion"
                               defaultValue={[]}
@@ -1212,11 +1333,19 @@ export default function Home() {
                                     onClick={() => decide('keep')}
                                   >
                                     Keep as is
-                                    {!selected.patch && (
+                                    {!selected.patch?.deleteRow && (
                                       <ArrowRight size={16} />
                                     )}
                                   </Button>
                                 </div>
+                                {similar.length > 1 && (
+                                  <Button
+                                    variant="outline"
+                                    onClick={() => setBulkOpen(true)}
+                                  >
+                                    Preview {similar.length} similar fixes
+                                  </Button>
+                                )}
                                 <p className="undo-hint">
                                   <RotateCcw size={13} /> You can undo a
                                   decision at any time in Changes.
@@ -1510,6 +1639,50 @@ export default function Home() {
             </span>
             <ArrowRight />
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              try {
+                printReport(
+                  reportHTML(original, data, rules, decisions, traces, summary),
+                );
+              } catch (e) {
+                setError(err(e));
+              }
+            }}
+          >
+            <Download /> Save report as PDF
+          </Button>
+          <p className="setting-help">
+            Opens a print-ready report. Choose “Save as PDF” in your browser’s
+            print dialog.
+          </p>
+          <Button
+            variant="ghost"
+            onClick={() =>
+              download(
+                'unresolved-issues.csv',
+                unresolvedCSV(findings, decisions),
+              )
+            }
+          >
+            Download unresolved issues (including kept values)
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              if (sourceFile) {
+                const url = URL.createObjectURL(sourceFile);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = sourceFile.name;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+              } else download(original.name, original.original);
+            }}
+          >
+            Download original file
+          </Button>
           <p className="export-more-label">Need the details, too?</p>
           {[
             [
@@ -1525,13 +1698,6 @@ export default function Home() {
               'Before and after values with your notes',
               'changes.csv',
               () => ledgerCSV(original, decisions),
-              'text/csv',
-            ],
-            [
-              'Original file',
-              'Exactly the file you started with',
-              original.name,
-              () => original.original,
               'text/csv',
             ],
           ].map(([title, description, name, body, mime]) => (
@@ -1551,6 +1717,67 @@ export default function Home() {
               <Download size={16} />
             </Button>
           ))}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+        <DialogContent className="settings-dialog">
+          <DialogHeader>
+            <DialogTitle>Review these {similar.length} changes</DialogTitle>
+            <DialogDescription>
+              Each correction is calculated from its own row. Only the fixes
+              listed here will be applied. Undo restores this whole batch.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="bulk-preview">
+            {similar.map((f) => (
+              <p key={f.id}>
+                <b>Row {f.rowId}</b> ·{' '}
+                {f.patch?.changes
+                  .map(
+                    (c) =>
+                      `${data.headers[c.column]}: ${c.before || '(empty)'} → ${c.after}`,
+                  )
+                  .join('; ')}
+              </p>
+            ))}
+          </div>
+          <Button onClick={applySimilar}>
+            Approve these {similar.length} changes
+          </Button>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={!!conversion}
+        onOpenChange={(v) => {
+          if (!v) setConversion(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Choose a worksheet</DialogTitle>
+            <DialogDescription>
+              Your original workbook stays unchanged. Each sheet is checked
+              separately.
+            </DialogDescription>
+          </DialogHeader>
+          {conversion?.result.sheets.map((sheet, index) => (
+            <Button
+              key={sheet.name}
+              variant="outline"
+              disabled={!sheet.csv}
+              onClick={() => {
+                try {
+                  acceptConversion(conversion.file, conversion.result, index);
+                } catch (e) {
+                  setError(err(e));
+                }
+              }}
+            >
+              {sheet.name}
+              {!sheet.csv ? ' · export this sheet as CSV' : ''}
+            </Button>
+          ))}
+          {error && <p role="alert">{error}</p>}
         </DialogContent>
       </Dialog>
       <Dialog open={keyOpen} onOpenChange={setKeyOpen}>
@@ -1623,8 +1850,8 @@ export default function Home() {
               <div>
                 <b>Add your file</b>
                 <p>
-                  Choose a CSV, or try the café example. If you use Excel or
-                  Google Sheets, save or download your spreadsheet as CSV first.
+                  Choose CSV, Excel, or a flat JSON table, or try the café
+                  example. Large CSVs open in the browser workspace.
                 </p>
               </div>
             </li>

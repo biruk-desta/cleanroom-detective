@@ -31,6 +31,7 @@ import {
   listRows,
   exportCSV,
   exportDecisions,
+  exportUnresolved,
 } from './database.mjs';
 
 const derive = promisify(scrypt);
@@ -219,7 +220,7 @@ export async function makeService({
         return;
       if (error) {
         const recover =
-          ['decide', 'undo'].includes(job.task) && current.summary;
+          ['decide', 'undo', 'bulk'].includes(job.task) && current.summary;
         db.prepare('UPDATE jobs SET state=?,phase=?,error=? WHERE id=?').run(
           recover ? 'complete' : 'failed',
           'Task needs attention',
@@ -315,9 +316,11 @@ export async function makeService({
           ? safeName(job.name)
           : kind === 'changes'
             ? 'changes.csv'
-            : kind === 'report'
-              ? 'review-report.html'
-              : safeName(job.name).replace(/\.csv$/i, '') + '-updated.csv';
+            : kind === 'unresolved'
+              ? 'unresolved-issues.csv'
+              : kind === 'report'
+                ? 'review-report.html'
+                : safeName(job.name).replace(/\.csv$/i, '') + '-updated.csv';
       res.setHeader(
         'Content-Disposition',
         `attachment; filename="${filename}"`,
@@ -335,6 +338,7 @@ export async function makeService({
         caseDb.exec('BEGIN');
         let iterable;
         if (kind === 'changes') iterable = exportDecisions(caseDb);
+        else if (kind === 'unresolved') iterable = exportUnresolved(caseDb);
         else if (kind === 'report') iterable = exportReport(caseDb, job);
         else iterable = exportCSV(caseDb);
         await pipeline(Readable.from(iterable), res);
@@ -645,7 +649,9 @@ export async function makeService({
       if (action === 'retry' && req.method === 'POST') {
         if (!['failed', 'cancelled'].includes(job.state))
           fail(409, 'This file does not need a retry.');
-        const task = ['decide', 'undo'].includes(job.task) ? 'audit' : job.task;
+        const task = ['decide', 'undo', 'bulk'].includes(job.task)
+          ? 'audit'
+          : job.task;
         let payload = JSON.parse(job.payload || '{}');
         if (task === 'audit' && !payload.rules)
           payload = { rules: JSON.parse(job.summary).rules };
@@ -666,10 +672,10 @@ export async function makeService({
         queue(job, 'audit', { rules: body.rules });
         return json(res, 202, clientJob(getJob(job.id)));
       }
-      if (action === 'decide' && req.method === 'POST') {
+      if (['decide', 'bulk'].includes(action) && req.method === 'POST') {
         if (job.state !== 'complete')
           fail(409, 'Finish checking the file first.');
-        queue(job, 'decide', { request: await jsonBody(req) });
+        queue(job, action, { request: await jsonBody(req) });
         return json(res, 202, clientJob(getJob(job.id)));
       }
       if (action === 'undo' && req.method === 'POST') {
@@ -680,7 +686,11 @@ export async function makeService({
       }
       if (action === 'download' && req.method === 'GET') {
         const kind = url.searchParams.get('kind') ?? 'updated';
-        if (!['original', 'updated', 'changes', 'report'].includes(kind))
+        if (
+          !['original', 'updated', 'changes', 'report', 'unresolved'].includes(
+            kind,
+          )
+        )
           fail(400, 'Unknown download.');
         return await download(req, res, job, kind);
       }
@@ -704,6 +714,9 @@ export async function makeService({
               listFindings(caseDb, {
                 afterRow,
                 afterId,
+                afterPriority: Number(
+                  url.searchParams.get('afterPriority') ?? 1000,
+                ),
                 limit: 30,
                 filter: url.searchParams.get('filter') ?? 'pending',
                 check: url.searchParams.get('check') ?? '',

@@ -4,6 +4,7 @@ import {
   importCase,
   auditCase,
   decideCase,
+  bulkCase,
   undoCase,
 } from './database.mjs';
 const db = openCase(workerData.database);
@@ -25,6 +26,8 @@ try {
     result = auditCase(db, workerData.rules, progress);
   else if (workerData.task === 'decide')
     result = decideCase(db, workerData.request, progress);
+  else if (workerData.task === 'bulk')
+    result = bulkCase(db, workerData.request, progress);
   else if (workerData.task === 'undo') result = undoCase(db, progress);
   else throw new Error('Unknown background task.');
   parentPort.postMessage({ type: 'done', result });

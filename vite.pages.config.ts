@@ -8,6 +8,8 @@ export default defineConfig({
   base: '/cleanroom-detective/',
   publicDir: `${project}public`,
   plugins: [react()],
+  optimizeDeps: { exclude: ['@sqlite.org/sqlite-wasm'] },
+  worker: { format: 'es' },
   define: { __CLEANROOM_STATIC__: 'true', __CLEANROOM_SERVER__: 'false' },
   resolve: { alias: { '@': project } },
   css: { postcss: { plugins: [tailwindcss()] } },

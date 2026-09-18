@@ -1,6 +1,6 @@
 # Cleanroom Detective
 
-A friendly spreadsheet review app for hackathon challenge 9. Choose a CSV or try the café example, review clear before-and-after suggestions, and download an updated copy. Every change needs your approval and can be undone.
+A friendly spreadsheet review app for hackathon challenge 9. Choose CSV, Excel, or JSON, or try the café example, review clear before-and-after suggestions, and download an updated copy. Every change needs your approval and can be undone.
 
 ## Share the browser demo
 
@@ -33,23 +33,33 @@ The AI chooses the order of all enabled checks, adapting to each check's measure
 5. Undo the most recent decision from **Changes**. Choose **Download results** for the updated CSV, list of changes, printable HTML report, and untouched original.
 6. For a genuine evaluation, have a human prepare an independent answer key, keep it hidden until investigation completes, then reveal it. Columns: `row,check,truth`; `truth` is `defect` or `valid`. Row numbers refer to parsed records, excluding the header. The app compares against the first completed investigation and locks subsequent investigations after reveal. No blind evaluation or real dataset benchmark is claimed by the included sample.
 
+## Team feedback additions
+
+- Set a plain-language goal and choose a domain. Local matching suggests a draft; it is not an LLM and does not enable repair assumptions automatically.
+- Confirm required fields, basic email structure, numeric bounds, outlier sensitivity, and priority for custom-rule violations. Save up to five reusable profiles on this device.
+- Review findings in priority order with qualitative evidence strength. Override a suggested cell correction using source evidence, or preview up to 30 similar cell fixes and approve them as an undoable batch.
+- Choose an Excel worksheet or convert a flat JSON array. Original bytes remain available. JSON numbers retain their original numeric text; Excel uses formatted values and existing cached formula results without running formulas.
+- Download unresolved issues, including kept values. **Save report as PDF** opens a print-ready report; choose **Save as PDF** in the browser dialog. No PDF-generation server is required.
+
+Advanced sensor/time-series checks, accounting reconciliation, near-duplicate entity matching, image classification, learned preferences, collaboration and external contact verification remain future work. The pitch must not claim Hermes/Claude, a Python repair sandbox, or a blind benchmark. See [feedback review](docs/feedback-plan.md).
+
 The visual explanation and LaTeX source are available from **Quick guide** and in `public/`.
 
 ## Data and limits
 
-1 MB per file, 5,000 records, 40 columns, 4,000 characters per cell. Comma-separated CSV with strict quoting, multiline values and unique headers. Explicit empty records are preserved. Empty physical lines are ignored. IDs remain strings; rows have separate stable numeric identities. Business rules must be confirmed for uploaded data. The date check expects YYYY-MM-DD. Unit conversion covers only explicit g/kg. The arithmetic check recovers missing positive integer quantities from trusted total/price, not general accounting reconciliation.
+Shared site: CSV/JSON up to 1 MB; Excel workbooks up to 10 MB, with one selected sheet converted to at most 1 MB / 5,000 rows / 40 columns. Cells support 4,000 characters. Large-file storage work is paused at the owner’s request. Comma-separated CSV with strict quoting, multiline values and unique headers. Explicit empty records are preserved. Empty physical lines are ignored. IDs remain strings; rows have separate stable numeric identities. Business rules must be confirmed for uploaded data. The date check expects YYYY-MM-DD. Unit conversion covers only explicit g/kg. The arithmetic check recovers missing positive integer quantities from trusted total/price, not general accounting reconciliation.
 
 Changes affect a working copy. Patches verify their before values and arithmetic/duplicate dependencies. Undo replays the remaining approved decisions from the original. All configured checks rerun after a decision. Keeping a value records review; it does not remove it from remaining findings in the report.
 
-There is no database or durable session storage. Refresh/closing the tab loses the case; export first. Rules-only audits stay in the browser. AI investigations send the CSV to this app's server for deterministic computation; only numerical aggregates go to the model. The app does not persist CSV payloads. Exported CSVs preserve source values and are not a spreadsheet formula sanitizer.
+The shared site keeps the current dataset in memory. Saved audit profiles contain only rules and column names in local browser storage. Refresh/closing the tab loses the case; export first. Rules-only audits stay in the browser. AI investigations send the CSV to this app's server for deterministic computation; only numerical aggregates go to the model. The app does not persist CSV payloads. Exported CSVs preserve source values and are not a spreadsheet formula sanitizer.
 
 ## Validation
 
-- `npm test`: 15 tests covering CSV parsing, exact arithmetic, dates, categories, units, conflicting IDs, stale evidence, undo, missing sentinels, key scoring and planner constraints.
+- `npm test`: 30 tests covering CSV parsing, exact arithmetic, dates, categories, units, conflicting IDs, stale evidence, undo, missing sentinels, key scoring and planner constraints.
 - `npx tsc --noEmit`: project type check.
 - `npm run lint:app`: authored application, audit engine, bridge and tests. The scaffold's full `npm run lint` currently reports pre-existing issues in unused UI primitives and hooks.
 - `npm run build`: production Worker and client build.
 - A live six-step Codex investigation on the sample returned the expected six findings (four repairs, two source/review items).
-- The page-scoped `get_case_profile` WebMCP tool is feature-detected. No supported WebMCP validation context was available in this session, so its browser registration contract is not claimed as verified. Broad browser UI testing was not performed.
+- The page-scoped `get_case_profile` WebMCP tool is feature-detected. No supported WebMCP validation context was available in this session, so its browser registration contract is not claimed as verified. The shared-site goal setup, sample review, priority display and export controls were checked in Chrome. Automated OS file selection requires the browser extension’s file-URL permission.
 
 Dependency note: React/React DOM/RSC were patched together to 19.2.8 to address the RSC advisory reported by npm. The retained Sites scaffold still reports transitive/tooling advisories (including image parsers and Windows development-server behavior); it was not broadly upgraded with `npm audit fix --force`. Review those before expanding this prototype beyond its owner-private deployment.

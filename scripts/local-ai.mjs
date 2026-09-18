@@ -274,7 +274,7 @@ for (const sig of ['SIGINT', 'SIGTERM'])
   process.on(sig, () => {
     server.close();
     terminate(activeChild);
-    rm(cwd, { recursive: true, force: true }).finally(() => {
+    void rm(cwd, { recursive: true, force: true }).finally(() => {
       const exit = setTimeout(() => process.exit(), 2200);
       exit.unref();
     });

@@ -11,6 +11,8 @@ import {
   listFindings,
   listRows,
   decideCase,
+  bulkCase,
+  exportUnresolved,
   undoCase,
   exportCSV,
   exportDecisions,
@@ -220,5 +222,76 @@ void test('keeping a proposed repair exports no unapplied before/after changes',
     assert.equal(row[ledger.headers.indexOf('action')], 'keep');
     assert.equal(row[ledger.headers.indexOf('before')], '');
     assert.equal(row[ledger.headers.indexOf('after')], '');
+  });
+});
+
+void test('bulk preview rejects stale fixes atomically and undo reverses the whole batch', async () => {
+  await fixture('id,item\n1, coffee \n2,COFFEE\n3, tea ', (db) => {
+    const rules = {
+      ...inferRules(['id', 'item']),
+      categories: ['Coffee', 'Tea'],
+      normalizeCategories: true,
+    };
+    auditCase(db, rules);
+    const original = [...exportCSV(db)].join('');
+    const items = listFindings(db, { filter: 'repair', limit: 30 }).map(
+      (f) => ({ id: f.id, fingerprint: f.fingerprint }),
+    );
+    assert.throws(
+      () =>
+        bulkCase(db, {
+          items: [items[0], { ...items[1], fingerprint: 'stale' }],
+        }),
+      /preview changed/,
+    );
+    assert.equal([...exportCSV(db)].join(''), original);
+    assert.equal(caseSummary(db).applied, 0);
+    bulkCase(db, { items, note: 'Reviewed every proposed value' });
+    assert.equal(caseSummary(db).applied, 3);
+    undoCase(db);
+    assert.equal(caseSummary(db).applied, 0);
+    assert.equal([...exportCSV(db)].join(''), original);
+    decideCase(db, {
+      ...items[0],
+      action: 'keep',
+      note: 'Source needs verification',
+    });
+    assert.ok([...exportUnresolved(db)].join('').includes('Kept unchanged'));
+  });
+});
+void test('global priority pagination brings late high-priority issues before early repairs', async () => {
+  const csv =
+    'id,item,date\n' +
+    Array.from(
+      { length: 70 },
+      (_, i) =>
+        `${i + 1},${i < 60 ? ' coffee ' : 'Coffee'},${i >= 60 ? '2026-02-30' : '2026-01-01'}`,
+    ).join('\n');
+  await fixture(csv, (db) => {
+    auditCase(db, {
+      ...inferRules(['id', 'item', 'date']),
+      normalizeCategories: true,
+      categories: ['Coffee'],
+    });
+    const all = listFindings(db, { limit: 100 });
+    assert.equal(all[0].rowId, 61);
+    const seen: string[] = [];
+    let cursor = { afterRow: 0, afterId: '', afterPriority: 1000 };
+    for (let i = 0; i < 100; i++) {
+      const page = listFindings(db, { ...cursor, limit: 7 }).slice(0, 7);
+      if (!page.length) break;
+      seen.push(...page.map((f) => f.id));
+      const last = page.at(-1)!;
+      cursor = {
+        afterRow: last.rowId,
+        afterId: last.id,
+        afterPriority: last.priority,
+      };
+    }
+    assert.deepEqual(
+      seen,
+      all.map((f) => f.id),
+    );
+    assert.equal(new Set(seen).size, seen.length);
   });
 });
