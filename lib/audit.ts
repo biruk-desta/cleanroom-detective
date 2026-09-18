@@ -329,6 +329,50 @@ function exactQuantity(total: string, price: string): string | null {
   const q = numerator / denominator;
   return q <= 1_000_000_000n ? q.toString() : null;
 }
+export function humanCorrection(
+  data: Dataset,
+  rules: Rules,
+  finding: Finding,
+  value: string,
+  note: string,
+  unit = '',
+): Finding {
+  if (!note.trim() || !value.trim())
+    throw new Error('Enter the source-verified value and describe its source.');
+  if (value.length > 4000)
+    throw new Error('Keep the correction under 4,000 characters.');
+  if (finding.patch?.deleteRow)
+    throw new Error(
+      'A row deletion cannot be replaced with a cell correction.',
+    );
+  const column = data.headers.indexOf(finding.column),
+    row = data.rows.find((r) => r.id === finding.rowId);
+  if (!row || column < 0) throw new Error('Record unavailable.');
+  const changes = [{ column, before: row.cells[column], after: value }];
+  if (finding.check === 'units') {
+    const u = data.headers.indexOf(rules.unitColumn);
+    if (numberValue(value) === null || u < 0 || unit !== rules.targetUnit)
+      throw new Error(
+        `Enter a plain numeric measurement in the confirmed target unit (${rules.targetUnit}). Change the audit rule first if another unit is needed.`,
+      );
+    changes.push({ column: u, before: row.cells[u], after: unit });
+  }
+  if (finding.check === 'arithmetic') {
+    const expected = exactQuantity(
+      row.cells[data.headers.indexOf(rules.totalColumn)],
+      row.cells[data.headers.indexOf(rules.priceColumn)],
+    );
+    if (!expected || !/^\d+$/.test(value) || Number(value) !== Number(expected))
+      throw new Error(
+        'This value conflicts with the confirmed total = quantity × price rule. Verify the total and price or revise the rule before correcting.',
+      );
+  }
+  return {
+    ...finding,
+    patch: { rowId: row.id, changes },
+    evidence: [...finding.evidence, `Human-provided source: ${note}`],
+  };
+}
 function formatDecimal(n: bigint, scale: number) {
   const sign = n < 0n ? '-' : '';
   let digits = (n < 0n ? -n : n).toString().padStart(scale + 1, '0');

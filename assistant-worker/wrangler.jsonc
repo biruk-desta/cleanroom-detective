@@ -1,0 +1,12 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "clearview-assistant",
+  "account_id": "8bfb39b738f99cf55e2ea5ed8cd28bfb",
+  "main": "index.ts",
+  "compatibility_date": "2026-09-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "ai": { "binding": "AI" },
+  "ratelimits": [{ "name": "CHAT_LIMIT", "namespace_id": "7370918", "simple": { "limit": 6, "period": 60 } }],
+  "observability": { "enabled": false }
+}

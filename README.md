@@ -1,4 +1,4 @@
-# Cleanroom Detective
+# ClearView
 
 A friendly spreadsheet review app for hackathon challenge 9. Choose CSV, Excel, or JSON, or try the café example, review clear before-and-after suggestions, and download an updated copy. Every change needs your approval and can be undone.
 
@@ -6,7 +6,7 @@ A friendly spreadsheet review app for hackathon challenge 9. Choose CSV, Excel, 
 
 **Website:** https://biruk-desta.github.io/cleanroom-detective/
 
-This public GitHub Pages version needs no account or installation. CSV parsing, rule checks, evidence, review, undo and exports run in the visitor's browser. It does not make model API calls and cannot use the owner's local ChatGPT sign-in. Files are not uploaded or saved by this static version; export before closing the tab.
+This public GitHub Pages version needs no account or installation. CSV parsing, rule checks, evidence, review, undo and exports run in the visitor's browser. The optional Ask the assistant panel calls Llama 3.3 70B through a separate Cloudflare Worker on the Ghost account’s Free plan. It sends messages, column names, numeric summaries and finding metadata; selected finding evidence is opt-in. Full files remain in the browser. No AI response can directly edit data. Export before closing the tab.
 
 Run `npm run build:pages` to build the standalone site and `npm run preview:pages` to preview it under `/cleanroom-detective/`. Pushes to `main` run tests, type checking, and the Pages build before publishing through GitHub Actions. The original server-backed app and optional local AI remain available below.
 
@@ -17,6 +17,10 @@ Requires Node 22.13+ and npm. Install with `npm ci`. Copy `.env.example` to `.en
 For the live local investigator, sign in with `codex login`, then run `npm run ai:local` in one terminal and `npm run dev` in another. Open http://localhost:3000. `CODEX_BIN` can point to the Codex executable. The bridge also detects this machine's installed Codex extension. It listens only on 127.0.0.1:8788.
 
 The local bridge reuses Codex's saved ChatGPT sign-in; it never reads or copies credentials. It runs ephemeral, read-only Codex processes with shell, apps, delegation, hooks, web search and image tools disabled. This is not represented as a universally verified tool-free sandbox. Only reconstructed, bounded numeric statistics, opaque column IDs, fixed check names, and finding counts enter its prompt. Raw CSV cells, headers, filenames and reviewer notes do not.
+
+## Public assistant deployment
+
+`assistant-worker/wrangler.jsonc` targets the Ghost account. Verify the intended account before deploying: the machine’s default Wrangler login may be a different account. Deploy with `wrangler deploy --config assistant-worker/wrangler.jsonc` using the Ghost login. No API key is embedded in the website. The Worker accepts only the site and local-preview browser origins, bounds request sizes and model output, and limits each IP to six requests per minute. Free-plan daily quotas stop inference when exhausted. No R2, file uploads, database, paid upgrade, or persistent chat storage is provisioned. Application request logging is disabled to avoid logging conversation content.
 
 ## Hosted mode
 
@@ -35,7 +39,8 @@ The AI chooses the order of all enabled checks, adapting to each check's measure
 
 ## Team feedback additions
 
-- Set a plain-language goal and choose a domain. Local matching suggests a draft; it is not an LLM and does not enable repair assumptions automatically.
+- Ask the real AI assistant to explain a finding, calculate from shared evidence, recommend the next review, or propose required fields/email/range/date/outlier rules from a conversational goal. Plans open as drafts in existing settings and require confirmation. Clarifying questions and stale-plan protection are built in.
+- Set a plain-language goal and choose a domain. The separate Suggest my plan button still uses local matching; it is not an LLM and does not enable repair assumptions automatically.
 - Confirm required fields, basic email structure, numeric bounds, outlier sensitivity, and priority for custom-rule violations. Save up to five reusable profiles on this device.
 - Review findings in priority order with qualitative evidence strength. Override a suggested cell correction using source evidence, or preview up to 30 similar cell fixes and approve them as an undoable batch.
 - Choose an Excel worksheet or convert a flat JSON array. Original bytes remain available. JSON numbers retain their original numeric text; Excel uses formatted values and existing cached formula results without running formulas.
@@ -51,11 +56,11 @@ Shared site: CSV/JSON up to 1 MB; Excel workbooks up to 10 MB, with one selected
 
 Changes affect a working copy. Patches verify their before values and arithmetic/duplicate dependencies. Undo replays the remaining approved decisions from the original. All configured checks rerun after a decision. Keeping a value records review; it does not remove it from remaining findings in the report.
 
-The shared site keeps the current dataset in memory. Saved audit profiles contain only rules and column names in local browser storage. Refresh/closing the tab loses the case; export first. Rules-only audits stay in the browser. AI investigations send the CSV to this app's server for deterministic computation; only numerical aggregates go to the model. The app does not persist CSV payloads. Exported CSVs preserve source values and are not a spreadsheet formula sanitizer.
+The shared site keeps the current dataset in memory. Saved audit profiles contain only rules and column names in local browser storage. Refresh/closing the tab loses the case; export first. Rules-only audits stay in the browser. The optional local/server investigator sends the CSV to this app's server for deterministic computation; only numerical aggregates go to that planner. The public conversational assistant uses the bounded context described above; chat history stays in memory and clears on file change or reload. The app does not persist CSV payloads. Exported CSVs preserve source values and are not a spreadsheet formula sanitizer.
 
 ## Validation
 
-- `npm test`: 30 tests covering CSV parsing, exact arithmetic, dates, categories, units, conflicting IDs, stale evidence, undo, missing sentinels, key scoring and planner constraints.
+- `npm test`: 34 tests covering CSV parsing, exact arithmetic, dates, categories, units, conflicting IDs, stale evidence, undo, missing sentinels, key scoring and planner constraints.
 - `npx tsc --noEmit`: project type check.
 - `npm run lint:app`: authored application, audit engine, bridge and tests. The scaffold's full `npm run lint` currently reports pre-existing issues in unused UI primitives and hooks.
 - `npm run build`: production Worker and client build.

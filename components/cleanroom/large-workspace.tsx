@@ -456,7 +456,7 @@ export function LargeWorkspace({
             <ScanSearch />
           </span>
           <span>
-            Cleanroom Detective<small>Room for your larger spreadsheets</small>
+            ClearView<small>Room for your larger spreadsheets</small>
           </span>
         </div>
         {local && onBack && (

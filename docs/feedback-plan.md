@@ -1,6 +1,6 @@
 # Team feedback implementation
 
-Source: team feature-review document, 12-tab snapshot reviewed on September 18, 2026.
+Source: team feature-review document, 13-tab snapshot reviewed on September 18, 2026.
 
 The features tab separates an initial version from later enhancements. Preserve the current layout and approval-first behavior.
 
@@ -15,3 +15,12 @@ Affected code: `audit.ts` and the portable SQLite engine (rules and decisions); 
 Later enhancements remain separate: learned preferences, multiple time-series correction strategies, expert assignment/collaboration, scientific image classification, and external contact verification. Email structure is not proof an address exists. Never contact people automatically.
 
 Presentation corrections: GitHub Pages runs React and TypeScript rules locally. The paused, unpublished large-file route uses SQLite WASM in a web worker and private browser storage. The repository also has an optional model planner and private Node service; do not describe those as active on GitHub Pages. There is no implemented Hermes/Claude 3.5 stack, MCP execution sandbox, or generated Python repair loop. Evaluation numbers must come from the actual answer-key comparison, not the draft's example numbers. The bundled café case is synthetic and is not a blind human-planted benchmark.
+
+
+## Interactive assistant follow-up
+
+Added an optional conversational assistant using Llama 3.3 70B on the verified Cloudflare Workers Free plan, while keeping the GitHub Pages URL and 1 MB CSV limit. The assistant explains findings, requests clarification, recommends review items, and proposes a bounded subset of rules. Those proposals open in the existing settings for confirmation. It cannot author dataset patches, contact anyone, execute code, or claim unsupported domain checks. Only bounded summaries and explicitly selected evidence enter the prompt. Messages remain in browser memory; the Worker stores none.
+
+Fixed missed initial requirements: manual overrides now work for suggested cell repairs, with atomic verified measurement/unit edits and arithmetic consistency checks. Current summaries update after apply, keep, bulk decisions, and undo. Reports label reviewer notes accurately; no authenticated reviewer identity is claimed. Branding is now ClearView, including the four-page proposed-design visual explainer.
+
+Still outstanding from the broader document catalog: excessive Other/category discovery; near-duplicate entities; finance amount parsing/accounting reconciliation/merchant matching; sensor intervals, gaps, drift, stuck readings and cross-field conflicts; preference learning; method comparisons; expert assignment; privacy masking throughout tables/exports; scientific images; and external contact verification. Existing date checks flag non-ISO or invalid calendar values but do not interpret ambiguous dates or infer time zones. The new Financial data prompt requests synthetic transactions/balance-sheet CSVs plus a planted-defect key; those fixtures and their domain-specific checks are not yet delivered. The Google Doc itself has not been edited. Do not describe the complete wish list as finished.

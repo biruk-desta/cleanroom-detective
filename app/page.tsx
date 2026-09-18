@@ -62,6 +62,7 @@ import {
   inspectCheck,
   allFindings,
   applyPatch,
+  humanCorrection,
   materialize,
   toCSV,
   ledgerCSV,
@@ -85,6 +86,8 @@ import { reportHTML, printReport } from '@/lib/report';
 import { STATIC_DEMO, publicAsset } from '@/lib/runtime';
 import { Welcome } from '@/components/cleanroom/welcome';
 import { CheckSettings } from '@/components/cleanroom/check-settings';
+import { AuditAssistant } from '@/components/cleanroom/audit-assistant';
+import { reviewSummary } from '@/lib/assistant';
 import {
   Accordion,
   AccordionItem,
@@ -146,6 +149,8 @@ export default function Home({
   } | null>(null);
   const [conversionWarnings, setConversionWarnings] = useState<string[]>([]);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [fileVersion, setFileVersion] = useState(0);
+  const [manualUnit, setManualUnit] = useState('');
   const [hasFile, setHasFile] = useState(false);
   const [original, setOriginal] = useState(INITIAL),
     [rules, setRules] = useState<Rules>(SAMPLE_RULES),
@@ -163,7 +168,6 @@ export default function Home({
     [notice, setNotice] = useState(''),
     [note, setNote] = useState(''),
     [manual, setManual] = useState(''),
-    [summary, setSummary] = useState(''),
     [filter, setFilter] = useState('pending'),
     [search, setSearch] = useState('');
   const [ruleOpen, setRuleOpen] = useState(false),
@@ -213,6 +217,9 @@ export default function Home({
     decision = decisions.find((d) => d.finding.id === selected?.id);
   const activeChecks = availableChecks(rules);
   const applied = decisions.filter((d) => d.action === 'apply').length;
+  const summary = ran
+    ? reviewSummary(data, rules, findings, decisions)
+    : 'Run your confirmed checks to create an audit summary.';
   useEffect(() => {
     if (STATIC_DEMO) return;
     fetch('/api/status')
@@ -240,6 +247,7 @@ export default function Home({
       setSourceFile(null);
       setConversionWarnings([]);
       setOriginal(next);
+      setFileVersion((v) => v + 1);
       setHasFile(true);
       const r = sample ? SAMPLE_RULES : inferRules(next.headers);
       setRules(r);
@@ -250,10 +258,10 @@ export default function Home({
       baseline.current = false;
       setNote('');
       setManual('');
+      setManualUnit('');
       setTraces([]);
       setAnswerKey([]);
       setRan(false);
-      setSummary('');
       setSelectedId('');
       setStatus('Ready to investigate');
       setError('');
@@ -280,7 +288,6 @@ export default function Home({
       setRules(confirmed);
       setFindings([]);
       setRan(false);
-      setSummary('');
       setRuleOpen(false);
       setError('');
       setStatus('Rules updated · ready to investigate');
@@ -297,7 +304,7 @@ export default function Home({
     setFindings([]);
     setNote('');
     setManual('');
-    setSummary('');
+    setManualUnit('');
     setTab('findings');
     setFilter('pending');
     setSearch('');
@@ -345,9 +352,6 @@ export default function Home({
           )[0]?.id ?? '',
         );
         setRan(true);
-        setSummary(
-          `Checked ${data.rows.length.toLocaleString()} rows using ${activeChecks.length} confirmed checks. Found ${fs.filter((f) => f.patch).length} suggested fixes and ${fs.filter((f) => !f.patch).length} items needing judgment. Your original file is unchanged.`,
-        );
         setStatus('Rules audit complete');
       } else {
         const controller = new AbortController();
@@ -389,7 +393,6 @@ export default function Home({
               setFrozen(e.findings);
               baseline.current = true;
             }
-            setSummary(e.summary);
             setSelectedId(
               [...(e.findings as Finding[])].sort(
                 (a, b) =>
@@ -427,7 +430,6 @@ export default function Home({
       if (ran) {
         setRan(true);
         setTraces(traces);
-        setSummary(summary);
       }
     } finally {
       running.current = false;
@@ -439,25 +441,8 @@ export default function Home({
     if (!selected || decision || busy) return;
     try {
       let f = selected;
-      if (human) {
-        if (!note.trim() || !manual.trim())
-          throw new Error(
-            'Enter the source-verified value and describe its source.',
-          );
-        const col = data.headers.indexOf(f.column),
-          row = data.rows.find((r) => r.id === f.rowId);
-        if (!row || col < 0) throw new Error('Record unavailable.');
-        if (manual.length > 4000)
-          throw new Error('Keep the correction under 4,000 characters.');
-        f = {
-          ...f,
-          patch: {
-            rowId: f.rowId,
-            changes: [{ column: col, before: row.cells[col], after: manual }],
-          },
-          evidence: [...f.evidence, `Human-provided source: ${note}`],
-        };
-      }
+      if (human)
+        f = humanCorrection(data, rules, selected, manual, note, manualUnit);
       if (action === 'apply' && !f.patch)
         throw new Error('This finding needs source evidence.');
       const next = action === 'apply' ? applyPatch(data, f.patch!) : data;
@@ -498,6 +483,7 @@ export default function Home({
       setSelectedId(nextItem?.id ?? f.id);
       setNote('');
       setManual('');
+      setManualUnit('');
       setNotice(
         action === 'apply'
           ? 'Change applied. Your original is still safe.'
@@ -547,6 +533,7 @@ export default function Home({
       setSearch('');
       setNote('');
       setManual('');
+      setManualUnit('');
       setError('');
       setTab('findings');
       setDecisions(next);
@@ -657,6 +644,7 @@ export default function Home({
     setSelectedId(id);
     setNote('');
     setManual('');
+    setManualUnit('');
   }
   function openChecks() {
     setDraft(rules);
@@ -678,7 +666,7 @@ export default function Home({
             <ScanSearch />
           </span>
           <span>
-            Cleanroom Detective<small>A clearer view of your spreadsheet</small>
+            ClearView<small>A clearer view of your spreadsheet</small>
           </span>
         </div>
         {onOpenLarge && (
@@ -774,6 +762,26 @@ export default function Home({
               </Button>
             </div>
           </div>
+          <AuditAssistant
+            key={fileVersion}
+            data={data}
+            rules={rules}
+            findings={findings}
+            decisions={decisions}
+            selected={selected}
+            ran={ran}
+            disabled={busy || !!answerKey.length}
+            onPlan={(next) => {
+              setDraft(next);
+              setRuleOpen(true);
+            }}
+            onFinding={(id) => {
+              chooseFinding(id);
+              setFilter('all');
+              setSearch('');
+              setTab('findings');
+            }}
+          />
           {notice && (
             <div className="decision-message">
               <output>
@@ -1060,6 +1068,7 @@ export default function Home({
                               setSelectedId('');
                               setNote('');
                               setManual('');
+                              setManualUnit('');
                             }}
                           >
                             <SelectTrigger aria-label="Which suggestions to show">
@@ -1095,6 +1104,7 @@ export default function Home({
                                 setSelectedId('');
                                 setNote('');
                                 setManual('');
+                                setManualUnit('');
                               }}
                             />
                           </div>
@@ -1350,7 +1360,7 @@ export default function Home({
                                   <RotateCcw size={13} /> You can undo a
                                   decision at any time in Changes.
                                 </p>
-                                {!selected.patch && (
+                                {!selected.patch?.deleteRow && (
                                   <Accordion className="manual-accordion">
                                     <AccordionItem value="manual">
                                       <AccordionTrigger>
@@ -1376,6 +1386,23 @@ export default function Home({
                                             placeholder="Enter the value from your source"
                                           />
                                         </label>
+                                        {selected.check === 'units' && (
+                                          <label className="field">
+                                            Verified unit
+                                            <select
+                                              value={manualUnit}
+                                              onChange={(e) =>
+                                                setManualUnit(e.target.value)
+                                              }
+                                            >
+                                              <option value="">
+                                                Choose a unit
+                                              </option>
+                                              <option value="kg">kg</option>
+                                              <option value="g">g</option>
+                                            </select>
+                                          </label>
+                                        )}
                                         <Button
                                           variant="outline"
                                           onClick={() => decide('apply', true)}
@@ -1568,7 +1595,7 @@ export default function Home({
                             <p>
                               {model.configured
                                 ? `Available AI connection: ${model.provider} · ${model.model}`
-                                : 'This version runs the checks in your browser without a language model.'}
+                                : 'Checks run in your browser. Ask the assistant connects to Llama 3.3 through Cloudflare’s free AI service.'}
                             </p>
                             <p>
                               For an independent evaluation, reveal a
@@ -1898,7 +1925,7 @@ export default function Home({
           </p>
           <small className="mode-note">
             {STATIC_DEMO
-              ? 'This shared version runs rule-based checks entirely in your browser.'
+              ? 'Rule-based checks run in your browser. The optional AI assistant answers questions and proposes plans for your review.'
               : 'When connected, AI chooses the checks. The checks supply the evidence; you decide what changes.'}
           </small>
         </DialogContent>

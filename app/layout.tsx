@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Cleanroom Detective | A clearer spreadsheet',
+  title: 'ClearView | A clearer spreadsheet',
   description:
     'Tidy your spreadsheet one suggestion at a time. Review clear before-and-after changes, then download an updated copy.',
 };

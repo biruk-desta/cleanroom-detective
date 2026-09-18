@@ -1,4 +1,4 @@
-name: Publish Cleanroom Detective
+name: Publish ClearView
 on:
   push:
     branches: [main]
