@@ -71,6 +71,7 @@ import {
   type KeyEntry,
 } from '@/lib/audit';
 import { reportHTML } from '@/lib/report';
+import { STATIC_DEMO, publicAsset } from '@/lib/runtime';
 const INITIAL = parseCSV(SAMPLE_CSV, 'cafe-sales-practice.csv');
 const label = (f: Finding) =>
   f.kind === 'repair'
@@ -200,6 +201,7 @@ export default function Home() {
   const activeChecks = availableChecks(rules);
   const applied = decisions.filter((d) => d.action === 'apply').length;
   useEffect(() => {
+    if (STATIC_DEMO) return;
     fetch('/api/status')
       .then((r) => r.json())
       .then((v) =>
@@ -693,7 +695,9 @@ export default function Home() {
                 <small>
                   {model.configured
                     ? `${model.provider} · ${model.model}`
-                    : 'The hosted app has no model key configured. Checks and review still work.'}
+                    : STATIC_DEMO
+                      ? 'Runs entirely in your browser. Upload a CSV or try the practice case. No sign-in needed.'
+                      : 'The hosted app has no model key configured. Checks and review still work.'}
                 </small>
                 {model.configured && (
                   <Button
@@ -1469,7 +1473,7 @@ export default function Home() {
           <p>
             <a
               className="text-primary underline"
-              href="/cleanroom-detective-explainer.pdf"
+              href={publicAsset('cleanroom-detective-explainer.pdf')}
               target="_blank"
               rel="noreferrer"
             >
@@ -1478,17 +1482,18 @@ export default function Home() {
             ·{' '}
             <a
               className="text-primary underline"
-              href="/cleanroom-detective-explainer.tex"
+              href={publicAsset('cleanroom-detective-explainer.tex')}
               download
             >
               LaTeX source
             </a>
           </p>
           <p className="footnote">
-            AI receives bounded numerical statistics and check outcomes, not raw
-            CSV cells. Rules audits stay in your tab. For a real evaluation,
-            keep the human answer key hidden until the first investigation
-            completes.
+            {STATIC_DEMO
+              ? 'This shared demo runs the rules audit without a language model. Your CSV stays in this tab. '
+              : 'AI receives bounded numerical statistics and check outcomes, not raw CSV cells. Rules audits stay in your tab. '}
+            For a real evaluation, keep the human answer key hidden until the
+            first investigation completes.
           </p>
         </DialogContent>
       </Dialog>

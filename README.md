@@ -2,6 +2,14 @@
 
 A CSV investigation workspace for hackathon challenge 9. Upload one table, declare its data rules, inspect measured findings, approve reversible repairs, and export the cleaned data with an evidence ledger.
 
+## Share the browser demo
+
+**Website:** https://biruk-desta.github.io/cleanroom-detective/
+
+This public GitHub Pages version needs no account or installation. CSV parsing, rule checks, evidence, review, undo and exports run in the visitor's browser. It does not make model API calls and cannot use the owner's local ChatGPT sign-in. Files are not uploaded or saved by this static version; export before closing the tab.
+
+Run `npm run build:pages` to build the standalone site and `npm run preview:pages` to preview it under `/cleanroom-detective/`. Pushes to `main` run tests, type checking, and the Pages build before publishing through GitHub Actions. The original server-backed app and optional local AI remain available below.
+
 ## Run locally
 
 Requires Node 22.13+ and npm. Install with `npm ci`. Copy `.env.example` to `.env` for a new checkout.

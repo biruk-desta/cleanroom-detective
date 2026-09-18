@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdtemp, writeFile, rm, readdir } from 'node:fs/promises';
+import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 const checks = [
@@ -23,10 +23,36 @@ const schema = {
 };
 const instructions =
   'You are a CSV audit investigator. Given numeric statistics with opaque column IDs and completed check counts, select the next available check. Never repeat a completed check. Choose finish only after all available checks ran. Explain your choice in one short sentence without claiming unseen findings. Do not use any tools, read files, browse or execute commands. Return the requested JSON. Input follows:\n';
-const candidate =
-  '/Users/birukdesta/.vscode/extensions/openai.chatgpt-26.908.40401-darwin-arm64/bin/macos-aarch64/codex';
-const bin =
-  process.env.CODEX_BIN || (existsSync(candidate) ? candidate : 'codex');
+async function findCodex() {
+  if (process.env.CODEX_BIN) return process.env.CODEX_BIN;
+  const executable = process.platform === 'win32' ? 'codex.exe' : 'codex';
+  const separator = process.platform === 'win32' ? ';' : ':';
+  for (const directory of (process.env.PATH || '').split(separator)) {
+    if (directory && existsSync(join(directory, executable)))
+      return join(directory, executable);
+  }
+  const extensions = join(homedir(), '.vscode', 'extensions');
+  try {
+    const names = (await readdir(extensions))
+      .filter((name) => name.startsWith('openai.chatgpt-'))
+      .sort()
+      .reverse();
+    const platform = process.platform === 'darwin' ? 'macos' : process.platform;
+    const architecture = process.arch === 'arm64' ? 'aarch64' : 'x86_64';
+    for (const name of names) {
+      const candidate = join(
+        extensions,
+        name,
+        'bin',
+        `${platform}-${architecture}`,
+        executable,
+      );
+      if (existsSync(candidate)) return candidate;
+    }
+  } catch {}
+  return executable;
+}
+const bin = await findCodex();
 const cwd = await mkdtemp(join(tmpdir(), 'cleanroom-planner-'));
 const schemaPath = join(cwd, 'schema.json');
 await writeFile(schemaPath, JSON.stringify(schema));
