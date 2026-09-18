@@ -4,7 +4,7 @@
 
 The private, disk-backed workspace is implemented and tested locally. The public GitHub Pages demo still uses the original browser-only 1 MB / 5,000-row limit. Cloudflare R2 is **not activated or connected**, and the large-file workspace is **not publicly deployed**.
 
-The Cloudflare connector successfully authenticated the owner's Ghost account on September 18, 2026. R2's dashboard requires adding a subscription: $0 due now, with automatic billing above the included allowance. Activation is awaiting the owner's choice. No paid plan or R2 subscription was enabled. Oracle is no longer being pursued.
+The owner stopped Cloudflare setup on September 18, 2026 and chose to keep the existing 1 MB public website. The Cloudflare API confirmed R2 was never enabled, and its unfinished checkout was closed. No paid plan or R2 subscription was enabled. Oracle is no longer being pursued. Do not resume cloud hosting without a new instruction.
 
 ## Verified local capacity
 
@@ -51,9 +51,9 @@ Upload chunks are 8 MiB. The processor admits work conservatively at 20 times in
 
 Original bytes are retained untouched. Working cells stay strings. Paged suggestions carry evidence fingerprints, server-validated changes, before-value checks and dependencies. Changes and undo are atomic. Duplicate groups compare all rows; numeric checks use the full valid cohort and exact IQR interpolation. Exports stream instead of building a whole-file string.
 
-## Cloudflare path still to finish
+## Optional future Cloudflare path (paused by the owner)
 
-The $0-compute option uses this computer for processing; it must remain online. R2 provides private object storage and transfer, not a Node/SQLite processor. Cloudflare Containers require a paid plan, so they are outside the current budget.
+These are planning notes, not active work. The local large-file processor is separate from the public GitHub Pages app; a successful local 1.18 GB test did not change the published site's upload limit. The $0-compute option would use this computer for processing; it must remain online. R2 provides private object storage and transfer, not a Node/SQLite processor. Cloudflare Containers require a paid plan, so they are outside the current budget.
 
 1. Obtain the owner's explicit choice about R2 activation and usage-based billing. The Standard allowance is 10 GB-month, 1 million Class A operations and 10 million Class B operations monthly, with free egress. This is an allowance, not a hard spending cap.
 2. Create a private, dedicated R2 bucket, narrowly scoped credentials, short retention/lifecycle cleanup and project storage reservations below the account allowance. Check other account usage too.
